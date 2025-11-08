@@ -4,6 +4,7 @@ channels:
 dependencies:
   - blobfile
   - datasets
+  - google-api-core
   - google-genai
   - ipykernel
   - jupyter

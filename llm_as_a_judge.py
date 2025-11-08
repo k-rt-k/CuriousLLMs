@@ -1,6 +1,26 @@
 """
-LLM-as-a-Judge for evaluating answers using Google's Gemini models.
+LLM-as-a-Judge for evaluating answers using Google's Gemini models or Tinker models.
 Supports both synchronous and batch API calls.
+
+Example usage:
+
+    # Using Gemini
+    def make_prompt(question: str, reference: str) -> str:
+        return f"Evaluate the answer. Question: {question}\\nReference: {reference}"
+    
+    gemini_judge = GeminiJudge(
+        model_name="gemini-2.0-flash-lite",
+        system_prompt=make_prompt
+    )
+    results = gemini_judge.judge_synchronous(questions, answers, references)
+    
+    # Using Tinker (requires tinker-cookbook)
+    tinker_judge = TinkerJudge(
+        base_model="meta-llama/Llama-3.1-8B-Instruct",
+        renderer_name="llama3",
+        system_prompt=make_prompt
+    )
+    results = tinker_judge.judge_synchronous(questions, answers, references)
 """
 
 import os
@@ -16,6 +36,16 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from enum import Enum
 
+import asyncio
+import tinker
+from google.api_core.exceptions import ResourceExhausted, TooManyRequests
+from tenacity import (
+            retry,
+            stop_after_attempt,
+            wait_exponential,
+            retry_if_exception_type,
+            RetryError
+        )
 
 class JudgeResult(BaseModel):
     """Structured output format for LLM judge evaluations."""
@@ -34,9 +64,9 @@ class JudgeResult(BaseModel):
     )
 
 ## TODO: prompt design
-GEMINI_SYSTEM_PROMPT: Callable[[str, str], str] = lambda question, reference: f''''''
+GEMINI_MATH_JUDGE_SYSTEM_PROMPT: Callable[[str, str], str] = lambda question, reference: f''''''
 
-    
+TINKER_SYSTEM_PROMPT: Callable[[str, str], str] = GEMINI_MATH_JUDGE_SYSTEM_PROMPT
 
 class jsonlParser:
     """Utility class for reading and writing JSONL (JSON Lines) files."""
@@ -137,7 +167,39 @@ class GeminiJudge:
         if not (len(questions) == len(answers) == len(references)):
             raise ValueError("questions, answers and references must have the same length")
         
-        return [self.judge_single(q, a, r) for q, a, r in zip(questions, answers, references)]
+        
+        
+        @retry(
+            retry=retry_if_exception_type((ResourceExhausted, TooManyRequests, Exception)),
+            wait=wait_exponential(multiplier=1, min=2, max=60),
+            stop=stop_after_attempt(3) if retry_on_error else stop_after_attempt(1),
+            reraise=False
+        )
+        def judge_with_retry(q: str, a: str, r: str) -> JudgeResult:
+            return self.judge_single(q, a, r)
+        
+        results: List[JudgeResult] = []
+        for q, a, r in zip(questions, answers, references):
+            try:
+                result = judge_with_retry(q, a, r)
+                results.append(result)
+            except RetryError as e:
+                # All retries exhausted
+                results.append(
+                    JudgeResult(
+                        explanation=f"Error after retries: {str(e.last_attempt.exception())}",
+                        verdict=JudgeResult.Verdict.UNCERTAIN
+                    )
+                )
+            except Exception as e:
+                # Unexpected error
+                results.append(
+                    JudgeResult(
+                        explanation=f"Unexpected error: {str(e)}",
+                        verdict=JudgeResult.Verdict.UNCERTAIN
+                    )
+                )
+        return results
 
     def judge_single(self, question: str, answer: str, reference: str) -> JudgeResult:
         """
@@ -183,7 +245,7 @@ class GeminiJudge:
             answers: List of answers to evaluate.
             references: List of reference answers.
             filename_fingerprint: Optional identifier for batch files (default: timestamp).
-            retry_on_error: Whether to retry failed requests (not yet implemented).
+            retry_on_error: Whether to retry failed requests (not yet implemented). If false, errors will be evaluated as 'uncertain'.
         """
         if retry_on_error:
             raise NotImplementedError("retry_on_error is not yet implemented for judge_batch")
@@ -333,4 +395,179 @@ class GeminiJudge:
         
         return results
     
+
+class TinkerJudge:
+    """
+    LLM-as-a-Judge using Tinker's models for answer evaluation.
+    
+    Requires: tinker-cookbook to be installed and available in the environment.
+    """
+    
+    def __init__(
+        self,
+        base_model: str = "meta-llama/Llama-3.1-8B-Instruct",
+        renderer_name: str = "llama3",
+        system_prompt: Optional[Callable[[str, str], str]] = None,
+        service_client: Optional[Any] = None,
+        tokenizer: Optional[Any] = None,
+    ):
+        """
+        Initialize the Tinker judge.
+        
+        Args:
+            base_model: Name of the base model to use (e.g., "meta-llama/Llama-3.1-8B-Instruct").
+            renderer_name: Name of the renderer to use (e.g., "llama3", "role_colon").
+            system_prompt: Function that takes (question, reference) and returns a system prompt string.
+            service_client: Optional tinker.ServiceClient instance. If None, creates a new one.
+            tokenizer: Optional tokenizer. If None, will load from base_model.
+        """
+
+        raise NotImplementedError("code hasnt been read, far from tested")
+
+        import tinker
+        from tinker_cookbook import renderers  # type: ignore
+        from tinker_cookbook.tokenizer_utils import get_tokenizer  # type: ignore
+        
+        self.base_model = base_model
+        self.renderer_name = renderer_name
+        self.system_prompt = system_prompt
+        
+        # Initialize Tinker clients
+        if service_client is None:
+            service_client = tinker.ServiceClient()
+        self.service_client = service_client
+        self.sampling_client = service_client.create_sampling_client(base_model=base_model)
+        
+        # Initialize tokenizer and renderer
+        if tokenizer is None:
+            tokenizer = get_tokenizer(base_model)
+        self.tokenizer = tokenizer
+        self.renderer = renderers.get_renderer(renderer_name, tokenizer=tokenizer)
+    
+    def judge_synchronous(
+        self,
+        questions: List[str],
+        answers: List[str],
+        references: List[str],
+        retry_on_error: bool = True,
+    ) -> List[JudgeResult]:
+        """
+        Evaluate answers synchronously (faster but more expensive for large batches).
+        
+        Args:
+            questions: List of questions.
+            answers: List of answers to evaluate.
+            references: List of reference answers.
+            retry_on_error: Whether to retry on API errors (not yet implemented).
+        """
+        if not (len(questions) == len(answers) == len(references)):
+            raise ValueError("questions, answers and references must have the same length")
+        
+        return [self.judge_single(q, a, r) for q, a, r in zip(questions, answers, references)]
+    
+    def judge_single(self, question: str, answer: str, reference: str) -> JudgeResult:
+        """
+        Evaluate a single answer using the LLM judge.
+        
+        Args:
+            question: The question being answered.
+            answer: The answer to evaluate.
+            reference: The reference/correct answer.
+        """
+        if not self.system_prompt:
+            raise ValueError("system_prompt must be provided to use judge_single")
+        
+        
+        
+        # Build the conversation messages
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": self.system_prompt(question, reference)},
+            {"role": "user", "content": answer},
+        ]
+        
+        # Render the conversation for the model
+        model_input = self.renderer.build_generation_prompt(messages)
+        
+        # Sample from the model (use async wrapper)
+        async def async_sample():
+            response = await self.sampling_client.sample_async(
+                model_input,
+                num_samples=1,
+                sampling_params=tinker.SamplingParams(
+                    temperature=0.0,
+                    max_tokens=512,
+                    stop=self.renderer.get_stop_sequences(),
+                ),
+            )
+            return response
+        
+        # Run async function
+        response = asyncio.run(async_sample())
+        
+        # Decode the response
+        parsed_message, _success = self.renderer.parse_response(response.sequences[0].tokens)
+        response_text = parsed_message.get("content", "").strip()
+        
+        # Parse the response into JudgeResult
+        try:
+            judge_result = self._parse_structured_output(response_text)
+        except (json.JSONDecodeError, ValueError):
+            # Fallback: try to extract verdict and explanation from text
+            judge_result = self._parse_text_output(response_text)
+        
+        return judge_result
+    
+    def judge_batch(
+        self,
+        questions: List[str],
+        answers: List[str],
+        references: List[str],
+        filename_fingerprint: Optional[str] = None,
+        retry_on_error: bool = False,
+    ) -> List[JudgeResult]:
+        """
+        Evaluate answers in batch (currently falls back to synchronous evaluation).
+        
+        Args:
+            questions: List of questions.
+            answers: List of answers to evaluate.
+            references: List of reference answers.
+            filename_fingerprint: Optional identifier (unused, for API compatibility).
+            retry_on_error: Whether to retry failed requests (not yet implemented).
+        """
+        # Note: Tinker doesn't have a native batch API like Gemini
+        # So we fall back to synchronous evaluation
+        return self.judge_synchronous(questions, answers, references, retry_on_error)
+    
+    def _parse_structured_output(self, text: str) -> JudgeResult:
+        """Try to parse structured JSON output."""
+        # Clean up markdown code blocks if present
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        
+        data = json.loads(text)
+        return JudgeResult.model_validate(data)
+    
+    def _parse_text_output(self, text: str) -> JudgeResult:
+        """Parse unstructured text output and extract verdict."""
+        text_lower = text.lower()
+        
+        # Try to detect verdict
+        if "correct" in text_lower and "incorrect" not in text_lower:
+            verdict = JudgeResult.Verdict.CORRECT
+        elif "incorrect" in text_lower or "wrong" in text_lower:
+            verdict = JudgeResult.Verdict.INCORRECT
+        else:
+            verdict = JudgeResult.Verdict.UNCERTAIN
+        
+        return JudgeResult(
+            explanation=text,
+            verdict=verdict
+        )
 

@@ -2,11 +2,11 @@ name: clm
 channels:
   - conda-forge
 dependencies:
+  - blobfile
   - datasets
   - google-genai
   - ipykernel
   - jupyter
-  - langchain
   - matplotlib
   - numpy
   - openai
@@ -14,14 +14,43 @@ dependencies:
   - plotly
   - python=3.13
   - pytorch
-  - ragas
+  - tenacity
   - tqdm
   - transformers
   - wandb
   - pip:
+    - aioboto3==15.5.0
+    - aiobotocore==2.25.1
+    - aiofiles==25.1.0
+    - aioitertools==0.13.0
+    - antlr4-python3-runtime==4.13.2
+    - boto3==1.40.61
+    - botocore==1.40.61
     - chz==0.3.0
     - docker-pycreds==0.4.0
     - dotenv==0.9.9
+    - frozendict==2.4.6
+    - ijson==3.4.0.post0
+    - inspect_ai==0.3.144
+    - jmespath==1.0.1
+    - jsonlines==4.0.0
+    - jsonpath-ng==1.7.0
+    - jsonref==1.1.0
+    - latex2sympy2_extended==1.10.2
+    - linkify-it-py==2.0.3
+    - math-verify==0.8.0
+    - mdit-py-plugins==0.5.0
+    - mmh3==5.2.0
+    - pathlib_abc==0.5.2
+    - ply==3.11
+    - rich==14.2.0
+    - s3fs==2025.9.0
+    - s3transfer==0.14.0
+    - semver==3.0.4
+    - shortuuid==1.0.13
+    - textual==6.5.0
     - tinker==0.2.2
+    - uc-micro-py==1.0.3
+    - universal_pathlib==0.3.4
 
 prefix: "/Users/kartikn/mamba/envs/clm"

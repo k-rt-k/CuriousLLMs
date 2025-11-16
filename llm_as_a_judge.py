@@ -64,7 +64,30 @@ class JudgeResult(BaseModel):
     )
 
 ## TODO: prompt design
-GEMINI_MATH_JUDGE_SYSTEM_PROMPT: Callable[[str, str], str] = lambda question, reference: f''''''
+GEMINI_MATH_JUDGE_SYSTEM_PROMPT: Callable[[str, str], str] = \
+    lambda question, reference: f"""
+You are an objective automatic grader. You will be given:
+- QUESTION: {question}
+- REFERENCE ANSWER: {reference}
+
+Task:
+- Compare the candidate response (provided as the user message) to the question and reference.
+- Return a concise judgement and a brief explanation.
+
+Verdict rules:
+- "correct" — the response answers the given question, is mathematically/semantically correct AND the reasoning process is valid and complete.
+- "incorrect" — the answer has a clear error, wrong final result, or misses essential necessary steps.
+- "uncertain" — the answer is ambiguous, incomplete, or cannot be judged from the information provided.
+
+Output requirements (strict):
+- Return exactly one valid JSON object and nothing else.
+- The object must contain exactly two fields:
+  {{ "explanation": "<short justification, 1-3 sentences>", "verdict": "correct" | "incorrect" | "uncertain" }}
+- Do NOT include any additional text, markdown, code fences, or fields.
+- Keep the explanation factual and cite the key reason (e.g., wrong arithmetic step, missing assumption, matches reference).
+
+Be concise and precise.
+""".strip()
 
 TINKER_SYSTEM_PROMPT: Callable[[str, str], str] = GEMINI_MATH_JUDGE_SYSTEM_PROMPT
 
@@ -130,7 +153,7 @@ class GeminiJudge:
     def __init__(
         self, 
         model_name: str = "gemini-2.0-flash-lite", 
-        system_prompt: Optional[Callable[[str, str], str]] = None
+        system_prompt: Optional[Callable[[str, str], str]] = GEMINI_MATH_JUDGE_SYSTEM_PROMPT
     ):
         """
         Initialize the Gemini judge.
@@ -141,9 +164,13 @@ class GeminiJudge:
         """
         self.model_name = model_name
 
-        self.gemini_client = Gemini()
+        API_KEY = os.getenv("GEMINI_API_KEY")
+        if not API_KEY:
+            raise ValueError("GEMINI_API_KEY environment variable not set")
+
+        self.gemini_client = Gemini(api_key=API_KEY)
         self.openai_client = OpenAI(
-            api_key=os.getenv("GEMINI_API_KEY"),
+            api_key=API_KEY,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
         self.system_prompt = system_prompt
@@ -213,20 +240,34 @@ class GeminiJudge:
         if not self.system_prompt:
             raise ValueError("system_prompt must be provided to use judge_single")
         
-        response = self.openai_client.responses.parse(
+        response = self.openai_client.chat.completions.create(
             model=self.model_name,
-            input=[
+            messages=[
                 {"role": "system", "content": self.system_prompt(question, reference)},
                 {"role": "user", "content": answer}
             ],
             temperature=0.0,
-            text_format=JudgeResult,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judge_result",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "explanation": {"type": "string"},
+                            "verdict": {"type": "string", "enum": ["uncertain", "correct", "incorrect"]},
+                        },
+                        "required": ["explanation", "verdict"],
+                    },
+                    "strict": True
+                }
+            }
         )
         
-        if not response.output_parsed:
+        if not response.choices or not response.choices[0].message.content:
             raise RuntimeError("Failed to parse judge response")
         
-        return response.output_parsed
+        return JudgeResult.model_validate_json(response.choices[0].message.content)
 
     def judge_batch(
         self, 
@@ -260,7 +301,7 @@ class GeminiJudge:
             filename_fingerprint = datetime.now().strftime("%y%m%d-%H%M%S")
 
         # Step 1: Prepare batch input in OpenAI Batch API format
-        batch_input_file = f'{self.model_name}-{filename_fingerprint}-input.jsonl'
+        batch_input_file = os.path.join("batch_data", f'{self.model_name}-{filename_fingerprint}-input.jsonl')
         batch_records = self._create_batch_records(questions, answers, references)
         jsonlParser.write_records(batch_input_file, batch_records)
 
@@ -278,7 +319,7 @@ class GeminiJudge:
             raise RuntimeError("Batch completed but no output file ID available")
         
         # Step 4: Download and parse results
-        results = self._parse_batch_results(completed_batch.output_file_id)
+        results = self._parse_batch_results(completed_batch.output_file_id, filename_fingerprint)
         
         return results
     
@@ -308,15 +349,7 @@ class GeminiJudge:
                         {"role": "system", "content": self.system_prompt(q, r)},
                         {"role": "user", "content": a}
                     ],
-                    "temperature": 0.0,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "judge_result",
-                            "schema": JudgeResult.model_json_schema(),
-                            "strict": True
-                        }
-                    }
+                    "temperature": 0.0
                 }
             })
         return batch_records
@@ -343,6 +376,7 @@ class GeminiJudge:
     
     def _wait_for_batch_completion(self, batch_id: str):
         """Poll batch job status until completion (polls every 30 seconds)."""
+        time.sleep(5)  # Initial wait before polling
         while True:
             batch = self.openai_client.batches.retrieve(batch_id)
             if batch.status in ('completed', 'failed', 'cancelled', 'expired'):
@@ -357,7 +391,20 @@ class GeminiJudge:
         
         return batch
     
-    def _parse_batch_results(self, output_file_id: str) -> List[JudgeResult]:
+    def _clean_json_string(self, s: str) -> str:
+        """Remove markdown fences from a string that should be JSON."""
+        s = s.strip()
+        if s.startswith("```json"):
+            s = s[7:]
+        elif s.startswith("```"):
+            s = s[3:]
+        
+        if s.endswith("```"):
+            s = s[:-3]
+            
+        return s.strip()
+
+    def _parse_batch_results(self, output_file_id: str, filename_fingerprint: str) -> List[JudgeResult]:
         """
         Download and parse batch results, maintaining original order.
         
@@ -365,6 +412,12 @@ class GeminiJudge:
         """
         # Download results
         file_content = self.gemini_client.files.download(file=output_file_id).decode('utf-8')
+
+        # Save the raw output file
+        output_file_path = os.path.join("batch_data", f'{self.model_name}-{filename_fingerprint}-output.jsonl')
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            f.write(file_content)
+        print(f"Batch output saved to {output_file_path}")
 
         # Parse JSONL output
         output_records = []
@@ -378,13 +431,24 @@ class GeminiJudge:
         # Extract JudgeResult from each response
         results: List[JudgeResult] = []
         for record in output_records:
-            if record.get('response') and record['response'].get('body'):
-                content = record['response']['body']['choices'][0]['message']['content']
-                judge_result = JudgeResult.model_validate_json(content)
-                results.append(judge_result)
-            else:
+            try:
+                if 'error' not in record and record.get('response') and record['response'].get('body'):
+                    body = record['response']['body']
+                    if body.get('choices') and len(body['choices']) > 0:
+                        content = body['choices'][0].get('message', {}).get('content')
+                        if content:
+                            cleaned_content = self._clean_json_string(content)
+                            judge_result = JudgeResult.model_validate_json(cleaned_content)
+                            results.append(judge_result)
+                        else:
+                            raise ValueError("No content in message")
+                    else:
+                        raise ValueError("No choices in response body")
+                else:
+                    raise ValueError("Error in response or missing body")
+            except Exception as e:
                 # Handle error cases gracefully
-                error_msg = record.get('error', {}).get('message', 'Unknown error')
+                error_msg = record.get('error', {}).get('message', str(e))
                 print(f"Error in record {record.get('custom_id')}: {error_msg}")
                 results.append(
                     JudgeResult(
@@ -395,7 +459,7 @@ class GeminiJudge:
         
         return results
     
-
+################################################################################## 
 class TinkerJudge:
     """
     LLM-as-a-Judge using Tinker's models for answer evaluation.
@@ -421,7 +485,6 @@ class TinkerJudge:
             service_client: Optional tinker.ServiceClient instance. If None, creates a new one.
             tokenizer: Optional tokenizer. If None, will load from base_model.
         """
-
         raise NotImplementedError("code hasnt been read, far from tested")
 
         import tinker

@@ -13,23 +13,13 @@ from tinker_cookbook import renderers
 from tinker_cookbook.rl.problem_env import ProblemEnv, ProblemGroupBuilder, logger
 from tinker_cookbook.rl.types import EnvGroupBuilder, RLDataset, RLDatasetBuilder
 from tinker_cookbook.tokenizer_utils import get_tokenizer
-from llm_as_a_judge import GeminiJudge, TinkerJudge, JudgeResult
 
-verdict_to_reward = {
-    "CORRECT": 1.0,
-    "INCORRECT": 0.0,
-    "UNCERTAIN": 0.5,
-}
 
 #TODO:rename
 class CustomMathEnv(MathEnv):
-    def __init__(self, solution: str, use_tinker: bool = False, *args, **kwargs):
+    def __init__(self, solution: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.solution = solution
-        ## initialize hyperparam (weighting between terminal and reasoning)
-        ## initialize judge
-        self.judge = TinkerJudge() if use_tinker else GeminiJudge() # FIXME: NEED DEFAULT SYSTEM PROMPT, POTENTIALLY BASED ON DATASET?
-        self.reasoning_weight = 0.8
 
     def check_answer(self, sample_str: str) -> float:  # type: ignore[override]
         """
@@ -43,18 +33,13 @@ class CustomMathEnv(MathEnv):
             answer = extract_boxed(sample_str)
         except ValueError:
             return 0.0
-
-        judge_result: JudgeResult = self.judge.judge_single(
-            self.get_question(),
-            sample_str,
-            self.solution
-        )
         
-        judge_reward = verdict_to_reward.get(judge_result.verdict, 0.0)  # Default to 0.0 for unknown verdicts
-        
-        return self.reasoning_weight * judge_reward + float(safe_grade(
+        return float(safe_grade(
                 answer, self.answer, self.grader, self.timeout
-        )) * (1 - self.reasoning_weight)
+        ))
+    
+    def get_reference_answer(self) -> str:
+        return self.solution
     
     @staticmethod
     def standard_fewshot_prefix() -> list[renderers.Message]: #TODO: Come up with better fewshot prefix?

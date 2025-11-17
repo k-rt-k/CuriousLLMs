@@ -272,16 +272,12 @@ class Encoder:
         if p == "auto" or p is None:
             for model in self._DEFAULT_CLS_MODELS:
                 if model.lower() == self.model_name.lower():
-                    print(f"[Encoder] using CLS pooling (by auto) for model '{self.model_name}'")
                     return lambda hs, am: cls_pool(hs, am)
             # fallback to mean_pool if we have attention mask available
-            print(f"[Encoder] using mean pooling (by auto) for model '{self.model_name}'")
             return lambda hs, am: mean_pool(hs, am)
         if p == "cls":
-            print(f"[Encoder] using CLS pooling (by cls) for model '{self.model_name}'")
             return lambda hs, am: cls_pool(hs, am)
         if p == "mean":
-            print(f"[Encoder] using mean pooling (by mean) for model '{self.model_name}'")
             return lambda hs, am: mean_pool(hs, am)
         raise ValueError(f"Unsupported pooling option: {pooling}")
 

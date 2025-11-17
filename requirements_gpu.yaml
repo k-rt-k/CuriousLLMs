@@ -1,14 +1,14 @@
-name: deepRLclm
+name: deepRLclm2
 channels:
   - nvidia
   - pytorch
   - conda-forge
   - defaults
 dependencies:
-  - python=3.10
-  - pytorch=2.5.1
-  - torchvision=0.15.2
-  - pytorch-cuda=12.1
+  - python=3.13
+  - pytorch
+  - torchvision
+  - pytorch-cuda
   - datasets
   - google-genai
   - ipykernel

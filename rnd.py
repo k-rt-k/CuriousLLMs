@@ -509,7 +509,7 @@ if __name__ == "__main__":
         rnd_hidden_dim=256,
         device=device,
         max_length=512,
-        concat_problem_answer=True,
+        concat_problem_answer=False,
         separator=" [SEP] "
     )
     

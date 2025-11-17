@@ -9,7 +9,7 @@ from tinker_cookbook.recipes.math_rl import (
     arithmetic_env,
     math_env,
 )
-from tinker_cookbook.rl.train import AsyncConfig, Config, main
+from curiosity_train import AsyncConfig, Config, main
 from tinker_cookbook.rl.types import RLDatasetBuilder
 import math_grade
 
@@ -32,9 +32,9 @@ class CLIConfig:
 
     # Training hyperparameters
     group_size: int = 4
-    groups_per_batch: int = 100
+    groups_per_batch: int = 8
     learning_rate: float = 1e-5
-    max_tokens: int = 5
+    max_tokens: int = 512
     kl_penalty_coef: float = 0.0
 
     # Number of optimizer steps per training iteration.
@@ -43,8 +43,8 @@ class CLIConfig:
 
     # Logging configuration
     log_path: str | None = None
-    wandb_project: str | None = None
-    wandb_name: str | None = None
+    wandb_project: str | None = "math_train"
+    wandb_name: str | None = "first_run"
     compute_post_kl: bool = False
 
     # Evals
@@ -60,6 +60,12 @@ class CLIConfig:
 
     max_steps_off_policy: int | None = None
     loss_fn: Literal["importance_sampling", "ppo"] = "ppo"
+
+    # BEGIN REASONING CODE
+    # Reasoning reward configuration
+    use_reasoning_rewards: bool = False
+    reasoning_reward_coef: float = 0.5
+    # END REASONING CODE
 
 
 def get_dataset_builder(
@@ -151,6 +157,10 @@ async def cli_main(cli_config: CLIConfig):
         if cli_config.max_steps_off_policy is not None
         else None,
         loss_fn=cli_config.loss_fn,
+        # BEGIN REASONING CODE
+        use_reasoning_rewards=cli_config.use_reasoning_rewards,
+        reasoning_reward_coef=cli_config.reasoning_reward_coef,
+        # END REASONING CODE
     )
 
     cli_utils.check_log_dir(log_path, behavior_if_exists=cli_config.behavior_if_log_dir_exists)

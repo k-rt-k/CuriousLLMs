@@ -76,7 +76,7 @@ def mean_pool(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torc
     # summed = (hidden_states * mask).sum(dim=1)
     # counts = mask.sum(dim=1).clamp(min=1e-9)
     # return summed / counts
-    return NotImplementedError("Mean Pooling has not been implemented yet.")
+    return NotImplementedError("Mean Pooling has not been implemented yet.") # type: ignore
 
 
 # ---------------------------
@@ -292,7 +292,7 @@ class Encoder:
 if __name__ == "__main__":
     # Example usage (replace with your preferred model names)
     MODEL = "ibm-granite/granite-embedding-english-r2"  
-    MODEL = "Alibaba-NLP/gte-modernbert-base"
+    # MODEL = "Alibaba-NLP/gte-modernbert-base"
     enc = Encoder(MODEL, max_length=8192)
 
     single = "Explain why x^2 + y^2 = 25 represents a circle."
@@ -302,8 +302,9 @@ if __name__ == "__main__":
     # Define three sentences
     sentences = [
         "Find the derivative of x² + 3x + 2.",  # A
-        "Compute the slope function for x squared plus three x plus two.",  # B (similar)
-        "Explain why the sky appears blue during the day."  # C (different)
+        "Compute the slope function for y squared plus three y plus two.",  # B (similar)
+        # "Explain why the sky appears blue during the day."  # C (different)
+        "Let us calculate the integral of sin(x) from 0 to pi."  # C (different)
     ]
 
     # Encode all at once

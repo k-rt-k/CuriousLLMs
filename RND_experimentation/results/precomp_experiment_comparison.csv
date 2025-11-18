@@ -1,0 +1,3 @@
+Experiment,Encoder,Learning Rate,Target Layers,Predictor Layers,Normalize Emb,Concat,Final Loss,Loss Reduction %,Final Ratio,Ratio Improvement %,MSE Unseen/Seen,Novelty Detection,Predictor Learned,Discrimination Improved,Duration (min)
+gte_eq_medium_t64-p64,gte,0.0001,"(256, 64)","(256, 64)",True,False,0.03581186272203922,58.25645971350658,1.0433001548611895,3.526846399070929,1.0607708212530025,weak,True,True,0.18400391737620037
+gte_eq_small_t32-p32,gte,0.0001,"(128, 32)","(128, 32)",True,False,0.039064043574035166,59.29752725255203,1.012328772022942,2.0183431716344953,1.05292126016542,weak,True,True,0.09370482365290324

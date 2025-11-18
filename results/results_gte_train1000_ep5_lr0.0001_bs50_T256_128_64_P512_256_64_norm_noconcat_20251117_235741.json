@@ -1,0 +1,63 @@
+{
+  "hyperparameters": {
+    "num_train_samples": 1000,
+    "num_test_samples": 200,
+    "encoder_name": "gte",
+    "target_layers": [
+      256,
+      128,
+      64
+    ],
+    "predictor_layers": [
+      512,
+      256,
+      64
+    ],
+    "normalize_embeddings": true,
+    "concat_problem_answer": false,
+    "max_length": 512,
+    "num_epochs": 5,
+    "learning_rate": 0.0001,
+    "batch_size": 50,
+    "device": "cuda",
+    "seed": 42
+  },
+  "encoder_full_name": "Alibaba-NLP/gte-modernbert-base",
+  "timestamp": "20251117_235741",
+  "training_metrics": {
+    "initial_loss": 0.011148538952693344,
+    "final_loss": 0.003240639762952924,
+    "loss_reduction_pct": 70.93215732838225,
+    "initial_ratio": 1.0068948532245425,
+    "final_ratio": 1.1167323392338286,
+    "ratio_improvement_pct": 10.908535847366359
+  },
+  "test_results": {
+    "rewards": {
+      "seen_mean": -0.7118489146232605,
+      "seen_std": 0.21648412942886353,
+      "unseen_mean": -0.614346981048584,
+      "unseen_std": 0.2518182694911957,
+      "random_mean": 0.056639544665813446,
+      "random_std": 0.40540051460266113
+    },
+    "mse": {
+      "seen_mean": 0.0029669746290892363,
+      "seen_std": 8.362625521840528e-05,
+      "unseen_mean": 0.0033318917267024517,
+      "unseen_std": 0.00011286626249784604,
+      "random_mean": 0.005843170452862978,
+      "random_std": 0.00024610874243080616
+    },
+    "ratios": {
+      "unseen_vs_seen": 1.1229892106738786,
+      "random_vs_seen": 1.9693969411148022,
+      "unseen_vs_random": 0.5702188651507293
+    }
+  },
+  "interpretation": {
+    "novelty_detection": "moderate",
+    "predictor_learned": true,
+    "discrimination_improved": true
+  }
+}

@@ -287,8 +287,8 @@ class Encoder:
 # ---------------------------
 if __name__ == "__main__":
     # Example usage (replace with your preferred model names)
-    MODEL = "ibm-granite/granite-embedding-english-r2"  
-    # MODEL = "Alibaba-NLP/gte-modernbert-base"
+    # MODEL = "ibm-granite/granite-embedding-english-r2"  
+    MODEL = "Alibaba-NLP/gte-modernbert-base"
     enc = Encoder(MODEL, max_length=8192)
 
     single = "Explain why x^2 + y^2 = 25 represents a circle."

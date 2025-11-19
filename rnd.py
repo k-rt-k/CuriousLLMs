@@ -122,15 +122,20 @@ class RNDModule(nn.Module):
     serves as an intrinsic reward signal, encouraging exploration of novel states.
 
     Key Features:
-        - No observation normalization (operates directly on embeddings)
+        - Optional FIXED embedding normalization (stats never updated after initialization)
         - Internal reward normalization using running statistics
         - Supports arbitrary batch shapes (e.g., [B, G, E] for GRPO)
         - Exposes predictor parameters for external optimization
 
     Architecture:
+        - Embedding Normalizer: Fixed statistics for consistent input normalization (optional)
         - Target Network: Frozen MLP that transforms embeddings to feature space
         - Predictor Network: Trainable MLP that learns to match target outputs
         - Reward Normalizer: Running statistics for normalizing intrinsic rewards
+
+    Important: Embedding normalization uses FIXED statistics to avoid the problem where
+    updating normalization stats would make the "same" embedding appear different over time,
+    breaking RND's ability to recognize previously seen states.
 
     Reference:
         Burda et al. "Exploration by Random Network Distillation" (2018)
@@ -138,41 +143,89 @@ class RNDModule(nn.Module):
     
     def __init__(self, 
                  input_dim: int, 
-                 output_dim: int = 512, 
-                 hidden_dim: int = 512,
-                 device: str = 'cpu'):
+                 target_layers: Tuple[int, ...] = (512, 512, 512),
+                 predictor_layers: Tuple[int, ...] = (512, 512, 512),
+                 device: str = 'cpu',
+                 normalize_embeddings: bool = False):
         """
         Initializes the RND module.
         
         Args:
             input_dim (int): Dimension of the input embedding (e.g., 384).
-            output_dim (int): Projection size for the RND networks.
-            hidden_dim (int): Hidden layer size for the MLPs.
+            target_layers (Tuple[int, ...]): Layer sizes for target network including output dim.
+                                             Example: (256, 128, 64) creates a 3-layer network
+                                             with hidden layers of 256, 128 and output of 64.
+            predictor_layers (Tuple[int, ...]): Layer sizes for predictor network including output dim.
+                                                Must have same output dimension as target_layers.
             device (str): The device to run the module on ('cpu' or 'cuda').
+            normalize_embeddings (bool): If True, normalize input embeddings using FIXED
+                                        statistics (computed once and frozen). This ensures
+                                        the "same" embedding always normalizes to the same value.
+                                        Default is False (no normalization, safest option).
+        
+        Raises:
+            ValueError: If target and predictor networks have different output dimensions.
         """
         super().__init__()
         self.device = device
         self.input_dim = input_dim
+        self.normalize_embeddings = normalize_embeddings
         
-        # Constraint 2: Internal reward normalizer
+        # Validate that both networks have same output dimension
+        if target_layers[-1] != predictor_layers[-1]:
+            raise ValueError(
+                f"Target and predictor networks must have same output dimension. "
+                f"Got target={target_layers[-1]}, predictor={predictor_layers[-1]}"
+            )
+        
+        self.output_dim = target_layers[-1]
+        
+        # Optional: FIXED embedding normalizer (stats will be frozen after initialization)
+        # This is crucial - we NEVER update these stats during training to avoid the problem
+        # where updating stats would make the same embedding normalize to different values
+        if normalize_embeddings:
+            self.embedding_normalizer = RunningMeanStd(shape=(input_dim,))
+            self.embedding_stats_frozen = False  # Will be set to True after initialization
+        else:
+            self.embedding_normalizer = None
+            self.embedding_stats_frozen = True
+        
+        # Reward normalizer: Updated during training (this is standard RND)
         self.reward_normalizer = RunningMeanStd(shape=()) 
         
-        self.target_network = self._build_network(input_dim, output_dim, hidden_dim).to(device)
-        self.predictor_network = self._build_network(input_dim, output_dim, hidden_dim).to(device)
+        self.target_network = self._build_network(input_dim, target_layers).to(device)
+        self.predictor_network = self._build_network(input_dim, predictor_layers).to(device)
         
         # Freeze the Target network (it is never trained)
         for param in self.target_network.parameters():
             param.requires_grad = False
 
-    def _build_network(self, input_dim, output_dim, hidden_dim) -> nn.Sequential:
-        """Helper to create the MLP architecture."""
-        return nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+    def _build_network(self, input_dim: int, layer_dims: Tuple[int, ...]) -> nn.Sequential:
+        """
+        Helper to create the MLP architecture with custom layer sizes.
+        
+        Args:
+            input_dim (int): Input dimension
+            layer_dims (Tuple[int, ...]): Dimensions for each layer including output
+                                         Example: (256, 128, 64) creates:
+                                         Linear(input_dim, 256) -> ReLU ->
+                                         Linear(256, 128) -> ReLU ->
+                                         Linear(128, 64)
+        
+        Returns:
+            nn.Sequential: The constructed MLP
+        """
+        layers = []
+        prev_dim = input_dim
+        
+        for i, dim in enumerate(layer_dims):
+            layers.append(nn.Linear(prev_dim, dim))
+            # Add ReLU for all layers except the last one
+            if i < len(layer_dims) - 1:
+                layers.append(nn.ReLU())
+            prev_dim = dim
+        
+        return nn.Sequential(*layers)
 
     def predictor_parameters(self) -> Iterator[nn.Parameter]:
         """
@@ -180,6 +233,51 @@ class RNDModule(nn.Module):
         Use this to initialize your external optimizer.
         """
         return self.predictor_network.parameters()
+    
+    def initialize_embedding_normalizer(self, initial_embeddings: torch.Tensor):
+        """
+        Initialize embedding normalization statistics from a fixed dataset.
+        
+        CRITICAL: This must be called ONCE with a representative sample of embeddings
+        before training begins. After this call, the embedding normalization stats
+        are FROZEN and will never be updated again.
+        
+        This ensures that the "same" embedding always normalizes to the same value,
+        which is essential for RND to recognize previously seen states.
+        
+        Args:
+            initial_embeddings: Tensor of shape [N, input_dim] containing a representative
+                               sample of embeddings from your dataset. Should be large enough
+                               to capture the distribution (e.g., 1000+ samples).
+        
+        Raises:
+            RuntimeError: If embedding normalization is disabled or already frozen.
+        
+        Example:
+            >>> # Collect initial embeddings
+            >>> initial_embeds = semantic_rnd.encode(initial_problem_answer_pairs)[0]
+            >>> # Freeze normalization stats
+            >>> semantic_rnd.rnd.initialize_embedding_normalizer(initial_embeds)
+        """
+        if not self.normalize_embeddings:
+            raise RuntimeError("Cannot initialize embedding normalizer when normalize_embeddings=False")
+        
+        if self.embedding_stats_frozen:
+            print("[WARNING] Embedding normalizer already frozen. Skipping re-initialization.")
+            return
+        
+        print(f"[RND] Initializing embedding normalizer with {initial_embeddings.shape[0]} samples...")
+        
+        # Update stats with initial data
+        self.embedding_normalizer.update(initial_embeddings)
+        
+        # FREEZE the stats - they will never be updated again
+        self.embedding_stats_frozen = True
+        
+        # print(f"[RND] ✓ Embedding normalizer frozen:")
+        # print(f"      Mean: {self.embedding_normalizer.mean[:5]}... (first 5 dims)")
+        # print(f"      Std:  {self.embedding_normalizer.std[:5]}... (first 5 dims)")
+        # print(f"[RND] ⚠️  These stats will NEVER be updated during training!")
 
     def forward(self, embeddings_batch: torch.Tensor, 
                 update_stats: bool = True,
@@ -193,12 +291,14 @@ class RNDModule(nn.Module):
           1. Raw rewards (detached for reward computation)
           2. Loss computation (with gradients flowing back to predictor)
         - Embeddings are detached by default to prevent unnecessary backprop through encoder
+        - If embedding normalization is enabled, uses FIXED stats (never updated)
         
         Args:
             embeddings_batch (torch.Tensor): A batch of embeddings [..., D].
             update_stats (bool): Whether to update the reward normalizer statistics.
                                  Set to False during evaluation/rollout if you don't
                                  want to update running stats.
+                                 NOTE: This does NOT affect embedding normalization (always frozen).
             train_encoder (bool): Whether to allow gradients to flow back through the embeddings
                                   to train the encoder. Default is False (encoder frozen/separate).
                                   Set to True for end-to-end training of encoder with RND loss.
@@ -220,6 +320,17 @@ class RNDModule(nn.Module):
         # 1. Flatten to [N, E]
         flat_embeddings = embeddings_batch.view(-1, self.input_dim)
         
+        # 1.5. OPTIONAL: Normalize embeddings using FIXED statistics
+        # This is safe because stats are frozen - same embedding always gives same normalized value
+        if self.normalize_embeddings:
+            if not self.embedding_stats_frozen:
+                raise RuntimeError(
+                    "Embedding normalizer not initialized! Call initialize_embedding_normalizer() "
+                    "with initial data before training."
+                )
+            # Use frozen stats to normalize
+            flat_embeddings = self.embedding_normalizer.normalize(flat_embeddings)
+        
         # 2. Forward pass through both networks (single pass each)
         # Target network: frozen, no gradients needed
         target_output = self.target_network(flat_embeddings).detach()
@@ -232,6 +343,7 @@ class RNDModule(nn.Module):
         raw_rewards = (target_output - predictor_output.detach()).pow(2).mean(dim=1)  # [N]
         
         # 4. Update reward normalizer statistics if requested
+        # (This is separate from embedding normalization and is standard RND behavior)
         if update_stats:
             self.reward_normalizer.update(raw_rewards)
         
@@ -268,25 +380,31 @@ class SemanticRND(nn.Module):
     def __init__(
         self,
         encoder_model_name: str = "Alibaba-NLP/gte-modernbert-base",
-        rnd_output_dim: int = 512,
-        rnd_hidden_dim: int = 512,
+        target_layers: Tuple[int, ...] = (512, 512, 512),
+        predictor_layers: Tuple[int, ...] = (512, 512, 512),
         device: str = None,
         max_length: int = 8192,
         concat_problem_answer: bool = True,
-        separator: str = " [SEP] "
+        separator: str = " [SEP] ",
+        normalize_embeddings: bool = False
     ):
         """
         Initialize the Semantic RND module.
         
         Args:
             encoder_model_name: Hugging Face model identifier for the sentence encoder
-            rnd_output_dim: Output dimension of RND networks (projection size)
-            rnd_hidden_dim: Hidden layer size for RND MLPs
+            target_layers: Layer dimensions for target network (including output).
+                          Example: (256, 128, 64) creates a 3-layer network.
+            predictor_layers: Layer dimensions for predictor network (including output).
+                             Must have same final dimension as target_layers.
             device: Device to run on ('cpu' or 'cuda'). If None, auto-detects.
             max_length: Maximum token length for encoder
             concat_problem_answer: If True, concatenate problem and answer before encoding.
                                    If False, encode them separately and concatenate embeddings.
             separator: Separator to use when concatenating problem and answer texts
+            normalize_embeddings: If True, normalize embeddings with FIXED statistics.
+                                 You MUST call initialize_embedding_normalizer() after creation
+                                 with initial data before training. Default False (safest).
         """
         super().__init__()
         
@@ -297,6 +415,7 @@ class SemanticRND(nn.Module):
         
         self.concat_problem_answer = concat_problem_answer
         self.separator = separator
+        self.normalize_embeddings = normalize_embeddings
         
         # 1. Initialize the encoder
         print(f"[SemanticRND] Initializing encoder: {encoder_model_name}")
@@ -324,13 +443,17 @@ class SemanticRND(nn.Module):
             print(f"[SemanticRND] Encoding concatenated problem+answer (input_dim={rnd_input_dim})")
         
         # 2. Initialize the RND module
-        print(f"[SemanticRND] Initializing RND module")
+        print(f"[SemanticRND] Initializing RND module (normalize_embeddings={normalize_embeddings})")
+        print(f"[SemanticRND] Target network layers: {target_layers}")
+        print(f"[SemanticRND] Predictor network layers: {predictor_layers}")
         self.rnd = RNDModule(
             input_dim=rnd_input_dim,
-            output_dim=rnd_output_dim,
-            hidden_dim=rnd_hidden_dim,
-            device=self.device
+            target_layers=target_layers,
+            predictor_layers=predictor_layers,
+            device=self.device,
+            normalize_embeddings=normalize_embeddings
         )
+    
         
         print(f"[SemanticRND] Initialization complete!")
     
@@ -340,6 +463,48 @@ class SemanticRND(nn.Module):
         Note: The encoder is frozen and not trainable.
         """
         return self.rnd.predictor_parameters()
+    
+    def initialize_embedding_normalizer(
+        self,
+        problem_answer_pairs: List[List[Tuple[str, str]]]
+    ):
+        """
+        Initialize embedding normalization with FIXED statistics from initial data.
+        
+        This should be called ONCE before training begins if normalize_embeddings=True.
+        The statistics computed from this data will be frozen and never updated.
+        
+        Args:
+            problem_answer_pairs: Initial dataset to compute normalization statistics.
+                                 Should be large enough to be representative (e.g., 1000+ samples).
+        
+        Example:
+            >>> # Create SemanticRND with embedding normalization
+            >>> semantic_rnd = SemanticRND(..., normalize_embeddings=True)
+            >>> 
+            >>> # Prepare initial data
+            >>> initial_data = [[(q1, a1), (q2, a2), ...], ...]
+            >>> 
+            >>> # Initialize and freeze normalization stats
+            >>> semantic_rnd.initialize_embedding_normalizer(initial_data)
+            >>> 
+            >>> # Now ready for training - stats will never change
+        """
+        if not self.normalize_embeddings:
+            print("[WARNING] Embedding normalization disabled. Skipping initialization.")
+            return
+        
+        # print(f"[SemanticRND] Encoding initial data for embedding normalization...")
+        
+        # Encode initial data to get embeddings
+        embeddings, _, total_samples = self.encode(problem_answer_pairs)
+        
+        # print(f"[SemanticRND] Initializing embedding normalizer with {total_samples} samples...")
+        
+        # Initialize RND's embedding normalizer with these embeddings
+        self.rnd.initialize_embedding_normalizer(embeddings)
+        
+        # print(f"[SemanticRND] ✓ Ready for training with FIXED embedding normalization!")
     
     def encode(
         self,
@@ -496,24 +661,33 @@ if __name__ == "__main__":
     """
     Simple example demonstrating how to use SemanticRND for computing
     intrinsic rewards based on semantic novelty.
+    
+    This example shows both modes:
+    1. Without embedding normalization (default, safest)
+    2. With FIXED embedding normalization (advanced)
     """
     
-    # 1. Initialize the module
-    print("\n1. Initializing SemanticRND...")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"\n{'='*70}")
+    print(f"EXAMPLE: SemanticRND without embedding normalization (default)")
+    print(f"{'='*70}")
+    
+    # 1. Initialize the module (default: no embedding normalization)
+    print("\n1. Initializing SemanticRND...")
     print(f"   Using device: {device}")
     
     semantic_rnd = SemanticRND(
         encoder_model_name="Alibaba-NLP/gte-modernbert-base",
-        rnd_output_dim=256,
-        rnd_hidden_dim=256,
+        target_layers=(256, 128, 64),  # Target: 3 layers with decreasing size
+        predictor_layers=(512, 256, 64),  # Predictor: different architecture, same output
         device=device,
         max_length=512,
         concat_problem_answer=False,
-        separator=" [SEP] "
+        separator=" [SEP] ",
+        normalize_embeddings=False  # Default: no embedding normalization (safest)
     )
     
-    # 2. Prepare sample data (GRPO-style: batches of groups of problem-answer pairs)
+    # 2. Prepare sample data
     print("\n2. Preparing sample problem-answer pairs...")
     problem_answer_pairs = [
         [  # Batch 1: Math problems
@@ -526,41 +700,71 @@ if __name__ == "__main__":
             ("What gas do plants absorb?", "Carbon dioxide (CO2)"),
         ]
     ]
-    print(f"   ✓ Created {len(problem_answer_pairs)} batches")
-    print(f"   ✓ Batch 1: {len(problem_answer_pairs[0])} pairs")
-    print(f"   ✓ Batch 2: {len(problem_answer_pairs[1])} pairs")
     
-    # 3. Compute intrinsic rewards and loss
+    # 3. Compute intrinsic rewards
     print("\n3. Computing intrinsic rewards...")
-    rewards, loss = semantic_rnd(
-        problem_answer_pairs,
-        update_stats=False
-    )
-    
+    rewards, loss = semantic_rnd(problem_answer_pairs, update_stats=False)
     print(f"   ✓ Rewards shape: {rewards.shape}")
     print(f"   ✓ Predictor loss: {loss.item():.6f}")
-    print(f"\n   Normalized intrinsic rewards:")
-    print(f"   {rewards}")
     
-    # 4. Train the RND predictor (optional)
-    print("\n4. Training RND predictor for 5 steps...")
+    # 4. Train briefly
+    print("\n4. Training RND predictor for 3 steps...")
     optimizer = torch.optim.Adam(semantic_rnd.predictor_parameters(), lr=1e-4)
     
-    for step in range(5):
+    for step in range(3):
         optimizer.zero_grad()
-        
-        # Generate varied training data
         train_pairs = [
-            [
-                (f"Question {step}-{i}: What is {i+1} × {i+2}?", 
-                 f"Answer: {(i+1)*(i+2)}")
-                for i in range(4)
-            ]
+            [(f"Q{step}-{i}: What is {i+1} × {i+2}?", f"A: {(i+1)*(i+2)}") for i in range(4)]
         ]
-        
         _, loss = semantic_rnd(train_pairs, update_stats=True)
         loss.backward()
         optimizer.step()
-        
-        print(f"   Step {step+1}/5: Loss = {loss.item():.6f}")
-    print("Example completed successfully!")
+        print(f"   Step {step+1}/3: Loss = {loss.item():.6f}")
+    
+    print("\n" + "="*70)
+    print("EXAMPLE: SemanticRND WITH fixed embedding normalization (advanced)")
+    print("="*70)
+    
+    # 5. Create a new instance with embedding normalization enabled
+    print("\n5. Initializing SemanticRND with embedding normalization...")
+    
+    semantic_rnd_normalized = SemanticRND(
+        encoder_model_name="Alibaba-NLP/gte-modernbert-base",
+        target_layers=(128, 64),  # Simple 2-layer target network
+        predictor_layers=(256, 128, 64),  # More complex 3-layer predictor
+        device=device,
+        max_length=512,
+        concat_problem_answer=True,
+        normalize_embeddings=True  # ENABLE embedding normalization
+    )
+    
+    # 6. Initialize embedding normalizer with initial data (REQUIRED)
+    print("\n6. Initializing embedding normalizer with initial data...")
+    initial_data = [
+        [
+            ("What is 2+2?", "4"),
+            ("What is 3×3?", "9"),
+            ("What is 10-5?", "5"),
+            ("What is 12÷3?", "4"),
+        ]
+    ]
+    
+    # This computes mean/std from initial data and FREEZES them
+    semantic_rnd_normalized.initialize_embedding_normalizer(initial_data)
+    
+    # 7. Now we can use it for training
+    print("\n7. Using SemanticRND with frozen embedding normalization...")
+    rewards, loss = semantic_rnd_normalized(problem_answer_pairs, update_stats=True)
+    print(f"   ✓ Rewards with normalized embeddings: {rewards.shape}")
+    print(f"   ✓ Loss: {loss.item():.6f}")
+    
+    print("\n" + "="*70)
+    print("KEY TAKEAWAY:")
+    print("  • Default (normalize_embeddings=False): Safest, works well")
+    print("  • Advanced (normalize_embeddings=True): Requires initialization,")
+    print("    but can help when embeddings have very different scales")
+    print("  • CRITICAL: Embedding stats are FROZEN to avoid the problem where")
+    print("    updating stats would make 'same' inputs normalize differently!")
+    print("="*70)
+    
+    print("\nExample completed successfully!")

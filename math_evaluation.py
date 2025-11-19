@@ -285,6 +285,7 @@ class AIMEEvaluator(SamplingClientEvaluator):
         group_size: int = 1,
         use_fewshot: bool = True,
         num_problems: int | None = None,
+        name: str = "aime_2024",
     ):
         """
         Initialize the AIME evaluator.
@@ -296,7 +297,9 @@ class AIMEEvaluator(SamplingClientEvaluator):
             group_size: Number of samples per problem (for computing variance)
             use_fewshot: Whether to use few-shot examples
             num_problems: Number of problems to evaluate (None = all)
+            name: Name identifier for this evaluator (used for metric prefixing)
         """
+        self.name = name
         self.model_name = model_name
         self.renderer_name = renderer_name
         self.max_tokens = max_tokens
@@ -367,23 +370,210 @@ class AIMEEvaluator(SamplingClientEvaluator):
 
 
 # ============================================================================
-# Main Evaluation Script
+# Parallel Evaluation Support
+# ============================================================================
+
+
+def _get_evaluator_name(evaluator: SamplingClientEvaluator) -> str:
+    """Get the name of an evaluator, if available."""
+    return getattr(evaluator, "name", "")
+
+
+async def run_single_evaluation(
+    evaluator: SamplingClientEvaluator,
+    sampling_client: tinker.SamplingClient,
+    log_path: str | None,
+    num_groups_to_log: int,
+) -> dict[str, float]:
+    """
+    Run a single evaluator and return its metrics with proper prefixing.
+    
+    Args:
+        evaluator: The evaluator to run
+        sampling_client: The sampling client to use
+        log_path: Path for logging (optional)
+        num_groups_to_log: Number of groups to log
+        
+    Returns:
+        Dictionary of metrics prefixed with evaluator name
+    """
+    ev_name = _get_evaluator_name(evaluator)
+    logger.info(f"Running evaluation: {ev_name or 'unnamed'}")
+    
+    # Run the evaluator
+    eval_metrics = await evaluator(sampling_client)
+    
+    # Prefix metrics with evaluator name if available
+    if ev_name:
+        prefixed_metrics = {f"{ev_name}/{k}": v for k, v in eval_metrics.items()}
+    else:
+        prefixed_metrics = eval_metrics
+    
+    return prefixed_metrics
+
+
+async def run_evaluations_parallel(
+    evaluators: list[SamplingClientEvaluator],
+    sampling_client: tinker.SamplingClient,
+    log_path: str | None = None,
+    num_groups_to_log: int = 4,
+) -> dict[str, float]:
+    """
+    Run all evaluators in parallel and return aggregated metrics.
+    
+    Args:
+        evaluators: List of evaluators to run
+        sampling_client: The sampling client to use
+        log_path: Path for logging (optional)
+        num_groups_to_log: Number of groups to log
+        
+    Returns:
+        Dictionary containing:
+        - Per-evaluator metrics (prefixed with evaluator name)
+        - Aggregate metrics (prefixed with "aggregate/")
+    """
+    if not evaluators:
+        logger.warning("No evaluators provided")
+        return {}
+    
+    logger.info(f"Running {len(evaluators)} evaluators in parallel...")
+    
+    # Create tasks for all evaluators
+    tasks = []
+    for i, evaluator in enumerate(evaluators):
+        ev_name = _get_evaluator_name(evaluator)
+        task = asyncio.create_task(
+            run_single_evaluation(evaluator, sampling_client, log_path, num_groups_to_log),
+            name=f"eval_{ev_name or i}",
+        )
+        tasks.append(task)
+    
+    # Wait for all to complete
+    results = await asyncio.gather(*tasks)
+    
+    # Merge all per-evaluator metrics
+    all_metrics = {}
+    for result in results:
+        all_metrics.update(result)
+    
+    # Compute aggregate metrics across evaluators
+    aggregate_metrics = _compute_aggregate_metrics(results)
+    all_metrics.update(aggregate_metrics)
+    
+    return all_metrics
+
+
+def _compute_aggregate_metrics(evaluator_results: list[dict[str, float]]) -> dict[str, float]:
+    """
+    Compute aggregate metrics across all evaluators.
+    
+    Args:
+        evaluator_results: List of metric dictionaries from each evaluator
+        
+    Returns:
+        Dictionary of aggregate metrics prefixed with "aggregate/"
+    """
+    if not evaluator_results:
+        return {}
+    
+    # Collect all metric keys (without prefixes) that appear across evaluators
+    all_keys = set()
+    for result in evaluator_results:
+        for key in result.keys():
+            # Remove the evaluator name prefix to get the base metric name
+            if "/" in key:
+                base_key = key.split("/", 1)[1]
+                all_keys.add(base_key)
+    
+    aggregate = {}
+    
+    # Compute mean across evaluators for each metric
+    for base_key in all_keys:
+        values = []
+        for result in evaluator_results:
+            # Try to find this metric in the result
+            for full_key, value in result.items():
+                if "/" in full_key and full_key.split("/", 1)[1] == base_key:
+                    if isinstance(value, (int, float)):
+                        values.append(value)
+                    break
+        
+        if values:
+            aggregate[f"aggregate/{base_key}"] = np.mean(values).item() #FIXME: NEED WEIGHTED AVERAGING BECAUSE DATASET SIZES WOULD BE DIFFERENT
+    
+    return aggregate
+
+
+# ============================================================================
+# Evaluator Configuration
+# ============================================================================
+
+
+@chz.chz
+class EvaluatorConfig:
+    """Configuration for a single evaluator."""
+    
+    dataset: str  # Name of the dataset (e.g., "aime_2024", "math", "deepmath")
+    num_problems: int | None = None  # Number of problems to evaluate (None = all)
+    use_fewshot: bool = True  # Whether to use few-shot examples
+    
+    def build(
+        self,
+        model_name: str,
+        renderer_name: str,
+        max_tokens: int,
+        group_size: int,
+    ) -> SamplingClientEvaluator:
+        """
+        Build the evaluator with the given shared parameters.
+        
+        Args:
+            model_name: Model name for tokenizer
+            renderer_name: Renderer name
+            max_tokens: Max tokens to generate
+            group_size: Number of samples per problem
+            
+        Returns:
+            Configured SamplingClientEvaluator
+        """
+        if self.dataset == "aime_2024":
+            return AIMEEvaluator(
+                model_name=model_name,
+                renderer_name=renderer_name,
+                max_tokens=max_tokens,
+                group_size=group_size,
+                use_fewshot=self.use_fewshot,
+                num_problems=self.num_problems,
+                name="aime_2024",
+            )
+        else:
+            raise ValueError(f"Unknown dataset: {self.dataset}")
+
+
+# ============================================================================
+# Main Evaluation Configuration
 # ============================================================================
 
 
 @chz.chz
 class EvalConfig:
-    """Configuration for AIME evaluation."""
+    """Configuration for multi-evaluator evaluation."""
 
     model_path: str | None = "tinker://a95b9543-d0b1-46c7-a5ab-7baa62d92906/sampler_weights/final"
     model_name: str = "Qwen/Qwen3-30B-A3B"
     renderer_name: str = "qwen3"
     max_tokens: int = 2048
     group_size: int = 4
-    use_fewshot: bool = True
-    num_problems: int | None = None
     log_path: str | None = None
     save_detailed_results: bool = True
+    num_groups_to_log: int = 4
+    
+    # Evaluator configurations
+    evaluators: list[EvaluatorConfig] = chz.field(
+        default_factory=lambda: [
+            EvaluatorConfig(dataset="aime_2024", num_problems=None, use_fewshot=True)
+        ]
+    )
 
 
 def setup_logging(log_path: str | None) -> Path | None:
@@ -415,52 +605,92 @@ def setup_logging(log_path: str | None) -> Path | None:
     return None
 
 
-def print_metrics_table(metrics: dict[str, float]) -> None:
+def print_metrics_table(metrics: dict[str, float], title: str = "Evaluation Results") -> None:
     """Print metrics in a beautiful table format using rich."""
-    table = Table(title="AIME 2024 Evaluation Results", show_header=True, header_style="bold magenta")
-    table.add_column("Metric", style="cyan", width=40)
+    table = Table(title=title, show_header=True, header_style="bold magenta")
+    table.add_column("Metric", style="cyan", width=50)
     table.add_column("Value", justify="right", style="green", width=20)
 
-    # Group metrics by category
-    categories = {
-        "Accuracy": [],
-        "Rewards": [],
-        "Format": [],
-        "Tokens": [],
-        "Episodes": [],
-        "By Group": [],
-        "Evaluation": [],
-        "Other": [],
-    }
-
-    for key, value in sorted(metrics.items()):
-        if "correct" in key:
-            categories["Accuracy"].append((key, value))
-        elif "reward" in key:
-            categories["Rewards"].append((key, value))
-        elif "format" in key:
-            categories["Format"].append((key, value))
-        elif "token" in key:
-            categories["Tokens"].append((key, value))
-        elif "episode" in key or "turn" in key:
-            categories["Episodes"].append((key, value))
-        elif "by_group" in key:
-            categories["By Group"].append((key, value))
-        elif "eval" in key:
-            categories["Evaluation"].append((key, value))
+    # Separate metrics by evaluator
+    evaluator_metrics = {}
+    aggregate_metrics = {}
+    
+    for key, value in metrics.items():
+        if key.startswith("aggregate/"):
+            aggregate_metrics[key] = value
         else:
-            categories["Other"].append((key, value))
-
-    # Add rows by category
-    for category, items in categories.items():
-        if items:
-            table.add_row(f"[bold]{category}[/bold]", "", style="bold yellow")
-            for key, value in items:
-                if isinstance(value, float):
-                    formatted_value = f"{value:.4f}" if abs(value) < 100 else f"{value:.2f}"
-                else:
-                    formatted_value = str(value)
-                table.add_row(f"  {key}", formatted_value)
+            # Extract evaluator name
+            if "/" in key:
+                eval_name = key.split("/", 1)[0]
+                if eval_name not in evaluator_metrics:
+                    evaluator_metrics[eval_name] = {}
+                evaluator_metrics[eval_name][key] = value
+            else:
+                # No prefix, treat as misc
+                if "other" not in evaluator_metrics:
+                    evaluator_metrics["other"] = {}
+                evaluator_metrics["other"][key] = value
+    
+    # Display aggregate metrics first
+    if aggregate_metrics:
+        table.add_row(f"[bold cyan]AGGREGATE METRICS[/bold cyan]", "", style="bold cyan")
+        for key, value in sorted(aggregate_metrics.items()):
+            formatted_value = f"{value:.4f}" if isinstance(value, float) and abs(value) < 100 else f"{value:.2f}"
+            display_key = key.replace("aggregate/", "")
+            table.add_row(f"  {display_key}", formatted_value)
+        table.add_row("", "")  # Separator
+    
+    # Display per-evaluator metrics
+    for eval_name in sorted(evaluator_metrics.keys()):
+        table.add_row(f"[bold yellow]{eval_name.upper()}[/bold yellow]", "", style="bold yellow")
+        
+        eval_data = evaluator_metrics[eval_name]
+        
+        # Group metrics by category
+        categories = {
+            "Accuracy": [],
+            "Rewards": [],
+            "Format": [],
+            "Tokens": [],
+            "Episodes": [],
+            "By Group": [],
+            "Evaluation": [],
+            "Other": [],
+        }
+        
+        for key, value in sorted(eval_data.items()):
+            # Remove evaluator prefix for display
+            display_key = key.split("/", 1)[1] if "/" in key else key
+            
+            if "correct" in key:
+                categories["Accuracy"].append((display_key, value))
+            elif "reward" in key:
+                categories["Rewards"].append((display_key, value))
+            elif "format" in key:
+                categories["Format"].append((display_key, value))
+            elif "token" in key:
+                categories["Tokens"].append((display_key, value))
+            elif "episode" in key or "turn" in key:
+                categories["Episodes"].append((display_key, value))
+            elif "by_group" in key:
+                categories["By Group"].append((display_key, value))
+            elif "eval" in key:
+                categories["Evaluation"].append((display_key, value))
+            else:
+                categories["Other"].append((display_key, value))
+        
+        # Add rows by category
+        for category, items in categories.items():
+            if items:
+                table.add_row(f"  [italic]{category}[/italic]", "", style="dim")
+                for key, value in items:
+                    if isinstance(value, float):
+                        formatted_value = f"{value:.4f}" if abs(value) < 100 else f"{value:.2f}"
+                    else:
+                        formatted_value = str(value)
+                    table.add_row(f"    {key}", formatted_value)
+        
+        table.add_row("", "")  # Separator between evaluators
 
     console.print(table)
 
@@ -468,7 +698,7 @@ def print_metrics_table(metrics: dict[str, float]) -> None:
 def save_results(metrics: dict[str, float], log_dir: Path, config: EvalConfig) -> None:
     """Save evaluation results to JSON file."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = log_dir / f"aime_results_{timestamp}.json"
+    results_file = log_dir / f"eval_results_{timestamp}.json"
 
     results = {
         "timestamp": timestamp,
@@ -478,8 +708,14 @@ def save_results(metrics: dict[str, float], log_dir: Path, config: EvalConfig) -
             "renderer_name": config.renderer_name,
             "max_tokens": config.max_tokens,
             "group_size": config.group_size,
-            "use_fewshot": config.use_fewshot,
-            "num_problems": config.num_problems,
+            "evaluators": [
+                {
+                    "dataset": ev_cfg.dataset,
+                    "num_problems": ev_cfg.num_problems,
+                    "use_fewshot": ev_cfg.use_fewshot,
+                }
+                for ev_cfg in config.evaluators
+            ],
         },
         "metrics": metrics,
     }
@@ -492,7 +728,7 @@ def save_results(metrics: dict[str, float], log_dir: Path, config: EvalConfig) -
 
 async def main(config: EvalConfig):
     """Main evaluation function."""
-    console.print("\n[bold cyan]AIME 2024 Evaluation Script[/bold cyan]\n")
+    console.print("\n[bold cyan]Multi-Dataset Evaluation Script[/bold cyan]\n")
 
     # Setup logging
     log_dir = setup_logging(config.log_path)
@@ -512,23 +748,31 @@ async def main(config: EvalConfig):
         logger.info("Using base model (no fine-tuned weights)")
         sampling_client = service_client.create_sampling_client(base_model=config.model_name)
 
-    # Create evaluator
-    evaluator = AIMEEvaluator(
-        model_name=config.model_name,
-        renderer_name=config.renderer_name,
-        max_tokens=config.max_tokens,
-        group_size=config.group_size,
-        use_fewshot=config.use_fewshot,
-        num_problems=config.num_problems,
-    )
+    # Build evaluators from configurations
+    logger.info(f"Building {len(config.evaluators)} evaluators...")
+    evaluators = []
+    for ev_cfg in config.evaluators:
+        evaluator = ev_cfg.build(
+            model_name=config.model_name,
+            renderer_name=config.renderer_name,
+            max_tokens=config.max_tokens,
+            group_size=config.group_size,
+        )
+        evaluators.append(evaluator)
+        logger.info(f"  - {_get_evaluator_name(evaluator)}: {ev_cfg.dataset}")
 
-    # Run evaluation
-    console.print("\n[bold yellow]Running evaluation...[/bold yellow]\n")
-    metrics = await evaluator(sampling_client)
+    # Run evaluations in parallel
+    console.print("\n[bold yellow]Running evaluations in parallel...[/bold yellow]\n")
+    metrics = await run_evaluations_parallel(
+        evaluators=evaluators,
+        sampling_client=sampling_client,
+        log_path=config.log_path,
+        num_groups_to_log=config.num_groups_to_log,
+    )
 
     # Display results
     console.print("\n")
-    print_metrics_table(metrics)
+    print_metrics_table(metrics, title="Multi-Dataset Evaluation Results")
 
     # Save results
     if log_dir and config.save_detailed_results:
@@ -536,13 +780,30 @@ async def main(config: EvalConfig):
 
     # Print summary
     console.print("\n[bold green]Evaluation Complete![/bold green]")
+    
+    # Extract aggregate metrics for summary
+    aggregate_correct = metrics.get('aggregate/correct', 0.0)
+    aggregate_format = metrics.get('aggregate/format', 0.0)
+    aggregate_reward = metrics.get('aggregate/reward/total', 0.0)
+    
     console.print(
-        f"\n[bold]Key Results:[/bold]\n"
-        f"  • Accuracy: {metrics.get('correct', 0.0):.2%}\n"
-        f"  • Format Valid: {metrics.get('format', 0.0):.2%}\n"
-        f"  • Average Reward: {metrics.get('reward/total', 0.0):.4f}\n"
-        f"  • Problems Evaluated: {metrics.get('eval/num_problems', 0):.0f}\n"
+        f"\n[bold]Aggregate Results (across all datasets):[/bold]\n"
+        f"  • Average Accuracy: {aggregate_correct:.2%}\n"
+        f"  • Average Format Valid: {aggregate_format:.2%}\n"
+        f"  • Average Reward: {aggregate_reward:.4f}\n"
+        f"  • Datasets Evaluated: {len(evaluators)}\n"
     )
+    
+    # Print per-dataset summaries
+    console.print("\n[bold]Per-Dataset Summary:[/bold]")
+    for evaluator in evaluators:
+        ev_name = _get_evaluator_name(evaluator)
+        correct = metrics.get(f'{ev_name}/correct', 0.0)
+        format_valid = metrics.get(f'{ev_name}/format', 0.0)
+        reward = metrics.get(f'{ev_name}/reward/total', 0.0)
+        console.print(
+            f"  • {ev_name}: Accuracy={correct:.2%}, Format={format_valid:.2%}, Reward={reward:.4f}"
+        )
 
     return metrics
 

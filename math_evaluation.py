@@ -139,6 +139,20 @@ def load_aime_dataset() -> list[dict]:
     ]
 
 
+def load_aime2025_dataset() -> list[dict]:
+    """Load the AIME 2025 dataset from HuggingFace."""
+    dataset = load_dataset("yentinglin/aime_2025", split="train")
+    return [
+        {
+            "id": item["id"],
+            "problem": item["problem"],
+            "answer": item["answer"],
+            "solution": item["solution"],  # Same as answer for AIME 2025
+        }
+        for item in dataset
+    ]
+
+
 def create_aime_env_builder(
     problem_data: dict,
     renderer: renderers.Renderer,
@@ -356,13 +370,111 @@ class AIMEEvaluator(SamplingClientEvaluator):
 
             # Log progress
             if (i + 1) % 5 == 0:
-                logger.info(f"Completed {i + 1}/{len(self.problems)} problems")
+                logger.info(f"Completed {i + 1}/{len(self.problems)} problems in {self.name}")
 
         # Compute metrics
         logger.info("Computing metrics...")
         metrics = _compute_trajectory_metrics(trajectory_groups)
 
         # Add AIME-specific metadata
+        metrics["eval/num_problems"] = len(self.problems)
+        metrics["eval/group_size"] = self.group_size
+
+        return metrics
+
+
+class AIME2025Evaluator(SamplingClientEvaluator):
+    """
+    Custom evaluator for AIME 2025 dataset.
+    Follows the same pattern as AIMEEvaluator.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        renderer_name: str = "llama3",
+        max_tokens: int = 2048,
+        group_size: int = 1,
+        use_fewshot: bool = True,
+        num_problems: int | None = None,
+        name: str = "aime_2025",
+    ):
+        """
+        Initialize the AIME 2025 evaluator.
+
+        Args:
+            model_name: Name of the model for tokenizer
+            renderer_name: Name of the renderer to use
+            max_tokens: Maximum tokens to generate
+            group_size: Number of samples per problem (for computing variance)
+            use_fewshot: Whether to use few-shot examples
+            num_problems: Number of problems to evaluate (None = all)
+            name: Name identifier for this evaluator (used for metric prefixing)
+        """
+        self.name = name
+        self.model_name = model_name
+        self.renderer_name = renderer_name
+        self.max_tokens = max_tokens
+        self.group_size = group_size
+        self.use_fewshot = use_fewshot
+
+        # Load dataset
+        logger.info("Loading AIME 2025 dataset...")
+        self.problems = load_aime2025_dataset()
+        if num_problems is not None:
+            self.problems = self.problems[:num_problems]
+        logger.info(f"Loaded {len(self.problems)} AIME 2025 problems")
+
+        # Setup tokenizer and renderer
+        tokenizer = get_tokenizer(model_name)
+        self.renderer = renderers.get_renderer(name=renderer_name, tokenizer=tokenizer)
+
+        # Setup conversation prefix
+        self.convo_prefix = AIMEEnv.standard_fewshot_prefix() if use_fewshot else None
+
+    async def __call__(self, sampling_client: tinker.SamplingClient) -> dict[str, float]:
+        """
+        Run evaluation on the AIME 2025 dataset.
+
+        Args:
+            sampling_client: The sampling client to evaluate
+
+        Returns:
+            Dictionary of evaluation metrics
+        """
+        logger.info(f"Starting evaluation on {len(self.problems)} AIME 2025 problems...")
+
+        # Create policy
+        policy = TinkerTokenCompleter(sampling_client, max_tokens=self.max_tokens)
+
+        # Run rollouts for each problem
+        trajectory_groups = []
+        for i, problem_data in enumerate(self.problems):
+            # Create environment builder
+            env_builder = create_aime_env_builder(
+                problem_data,
+                self.renderer,
+                convo_prefix=self.convo_prefix,
+                group_size=self.group_size,
+            )
+
+            # Enable logging for first few problems
+            enable_logging = i < 5
+
+            # Run rollout
+            with logtree.optional_enable_logging(enable=enable_logging):
+                traj_group = await do_group_rollout(env_builder, policy)
+                trajectory_groups.append(traj_group)
+
+            # Log progress
+            if (i + 1) % 5 == 0:
+                logger.info(f"Completed {i + 1}/{len(self.problems)} problems in {self.name}")
+
+        # Compute metrics
+        logger.info("Computing metrics...")
+        metrics = _compute_trajectory_metrics(trajectory_groups)
+
+        # Add AIME 2025-specific metadata
         metrics["eval/num_problems"] = len(self.problems)
         metrics["eval/group_size"] = self.group_size
 
@@ -546,6 +658,16 @@ class EvaluatorConfig:
                 num_problems=self.num_problems,
                 name="aime_2024",
             )
+        elif self.dataset == "aime_2025":
+            return AIME2025Evaluator(
+                model_name=model_name,
+                renderer_name=renderer_name,
+                max_tokens=max_tokens,
+                group_size=group_size,
+                use_fewshot=self.use_fewshot,
+                num_problems=self.num_problems,
+                name="aime_2025",
+            )
         else:
             raise ValueError(f"Unknown dataset: {self.dataset}")
 
@@ -571,7 +693,8 @@ class EvalConfig:
     # Evaluator configurations
     evaluators: list[EvaluatorConfig] = chz.field(
         default_factory=lambda: [
-            EvaluatorConfig(dataset="aime_2024", num_problems=None, use_fewshot=True)
+            EvaluatorConfig(dataset="aime_2024", num_problems=None, use_fewshot=True),
+            EvaluatorConfig(dataset="aime_2025", num_problems=None, use_fewshot=True),
         ]
     )
 

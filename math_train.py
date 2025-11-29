@@ -27,7 +27,7 @@ class CLIConfig:
     load_checkpoint_path: str | None = None
 
     # Environment configuration
-    env: str = "math"  # Options: arithmetic, math, polaris, deepmath, gsm8k
+    env: str = "math"  # Options: arithmetic, math, polaris, deepmath, gsm8k, mixed
     seed: int = 0  # Random seed for data shuffling
 
     # Training hyperparameters
@@ -67,6 +67,12 @@ class CLIConfig:
     reasoning_reward_coef: float = 0.5
     # END REASONING CODE
 
+    # Mixed dataset configuration (only used when env="mixed")
+    math_train_size: int | None = None  # None = use all ~12000 Math samples
+    deepmath_train_size: int = 8000
+    deepmath_test_size: int = 500
+    deepmath_seed: int = 42
+
 
 def get_dataset_builder(
     env: str,
@@ -75,6 +81,11 @@ def get_dataset_builder(
     renderer_name: str,
     group_size: int,
     seed: int = 0,
+    # Mixed dataset parameters
+    math_train_size: int | None = None,
+    deepmath_train_size: int = 8000,
+    deepmath_test_size: int = 500,
+    deepmath_seed: int = 42,
 ) -> RLDatasetBuilder:
     if env == "arithmetic":
         return arithmetic_env.ArithmeticDatasetBuilder(
@@ -93,6 +104,19 @@ def get_dataset_builder(
             renderer_name=renderer_name,
             group_size=group_size,
             seed=seed,
+        )
+    elif env == "mixed":
+        return math_grade.get_math_dataset_builder(
+            dataset_name="mixed",
+            batch_size=batch_size,
+            model_name_for_tokenizer=model_name,
+            renderer_name=renderer_name,
+            group_size=group_size,
+            seed=seed,
+            math_train_size=math_train_size,
+            deepmath_train_size=deepmath_train_size,
+            deepmath_test_size=deepmath_test_size,
+            deepmath_seed=deepmath_seed,
         )
     elif env in ["polaris", "deepmath", "gsm8k"]:
         return math_env.get_math_dataset_builder(
@@ -136,6 +160,11 @@ async def cli_main(cli_config: CLIConfig):
             renderer_name=renderer_name,
             group_size=cli_config.group_size,
             seed=cli_config.seed,
+            # Mixed dataset parameters
+            math_train_size=cli_config.math_train_size,
+            deepmath_train_size=cli_config.deepmath_train_size,
+            deepmath_test_size=cli_config.deepmath_test_size,
+            deepmath_seed=cli_config.deepmath_seed,
         ),
         model_name=cli_config.model_name,
         lora_rank=cli_config.lora_rank,

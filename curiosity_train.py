@@ -439,6 +439,13 @@ async def do_sync_training_with_stream_minibatch(
     dataset: RLDataset,
     ml_logger: ml_log.Logger,
     tokenizer: Tokenizer,
+    # BEGIN SEMANTIC_RND CODE
+    novelty_model: SemanticRND | None = None,
+    novelty_model_optimizer: torch.optim.Optimizer | None = None,
+    intrinsic_reward_coef: float = 0.1,
+    gemini_judge: GeminiJudge | None = None,
+    reasoning_reward_coef: float = 0.5,
+    # END SEMANTIC_RND CODE
 ):
     """
     Implements fully synchronous on-policy training with minibatch streaming.
@@ -513,6 +520,7 @@ async def do_sync_training_with_stream_minibatch(
                 )
 
             # Run multiple optimizer substeps per training iteration
+            # BEGIN SEMANTIC_RND CODE
             (
                 sampling_client,
                 full_batch_metrics,
@@ -523,7 +531,13 @@ async def do_sync_training_with_stream_minibatch(
                 training_client,
                 service_client,
                 tokenizer,
+                novelty_model=novelty_model,
+                novelty_model_optimizer=novelty_model_optimizer,
+                intrinsic_reward_coef=intrinsic_reward_coef,
+                gemini_judge=gemini_judge,
+                reasoning_reward_coef=reasoning_reward_coef,
             )
+            # END SEMANTIC_RND CODE
 
         # Log metrics
         metrics.update(full_batch_metrics)
@@ -1098,6 +1112,7 @@ async def compute_full_batch_metrics_and_get_sampling_client(
     return sampling_client, metrics
 
 
+# BEGIN SEMANTIC_RND CODE
 @scope
 async def do_train_step_streaming_and_get_sampling_client(
     cfg: Config,
@@ -1107,7 +1122,13 @@ async def do_train_step_streaming_and_get_sampling_client(
     service_client: tinker.ServiceClient,
     tokenizer: Tokenizer,
     trajectory_group_filter: Callable[[WrappedTrajectoryGroup | None], bool] = lambda _: True,
+    novelty_model: SemanticRND | None = None,
+    novelty_model_optimizer: torch.optim.Optimizer | None = None,
+    intrinsic_reward_coef: float = 0.1,
+    gemini_judge: GeminiJudge | None = None,
+    reasoning_reward_coef: float = 0.5,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+# END SEMANTIC_RND CODE
     """
     As soon as we have enough trajectories for a minibatch, we will train on them.
     This allows us to overlap sampling and training.
@@ -1133,6 +1154,9 @@ async def do_train_step_streaming_and_get_sampling_client(
     all_data_D = []
     all_training_logprobs_D = []
     all_wrapped_trajectory_groups = []
+    # BEGIN SEMANTIC_RND CODE
+    rnd_loss_tensor = None  # Initialize to None; will be set in minibatch loop if novelty_model provided
+    # END SEMANTIC_RND CODE
     for i_substep in range(cfg.num_substeps):
         # Run multiple minibatches per substep
         # Once we have enough trajectories for a minibatch, train on them
@@ -1154,7 +1178,8 @@ async def do_train_step_streaming_and_get_sampling_client(
             # To have the same results as the sync implementation, we will
             # remove these and train on a smaller batch.
             wrapped_trajectory_groups = [g for g in wrapped_trajectory_groups if g is not None]
-            data_D, prepare_minibatch_metrics = await prepare_minibatch(
+            # BEGIN SEMANTIC_RND CODE
+            data_D, prepare_minibatch_metrics, rnd_loss_tensor = await prepare_minibatch(
                 [g.env_group_builder for g in wrapped_trajectory_groups],
                 [g.trajectory_group for g in wrapped_trajectory_groups],
                 tokenizer,
@@ -1162,7 +1187,13 @@ async def do_train_step_streaming_and_get_sampling_client(
                 model_name=cfg.model_name,
                 kl_penalty_coef=cfg.kl_penalty_coef,
                 kl_discount_factor=cfg.kl_discount_factor,
+                novelty_model=novelty_model,
+                intrinsic_reward_coef=intrinsic_reward_coef,
+                gemini_judge=gemini_judge,
+                reasoning_reward_coef=reasoning_reward_coef,
+                i_batch=i_batch,
             )
+            # END SEMANTIC_RND CODE
             metrics.update(prepare_minibatch_metrics)
 
             # Accumulate gradients across multiple minibatches
@@ -1183,6 +1214,15 @@ async def do_train_step_streaming_and_get_sampling_client(
         # Run optimizer step only once after all minibatches
         with timed(f"train/optim_substep_{i_substep}", metrics):
             await optim_step(training_client, cfg.learning_rate)
+
+    # BEGIN SEMANTIC_RND CODE
+    # Update RND model if provided (after all substeps)
+    if novelty_model is not None and novelty_model_optimizer is not None and rnd_loss_tensor is not None:
+        with timed("train_rnd", metrics):
+            novelty_model_optimizer.zero_grad()
+            rnd_loss_tensor.backward()
+            novelty_model_optimizer.step()
+    # END SEMANTIC_RND CODE
 
     # Aggregate metrics across the entire batch
     metrics.update(compute_sampling_client_metrics(all_wrapped_trajectory_groups))
@@ -1460,12 +1500,13 @@ async def main(
     # Initialize SemanticRND with encoder and RND networks
     novelty_model = SemanticRND(
         encoder_model_name="Alibaba-NLP/gte-modernbert-base",
-        rnd_output_dim=512,
-        rnd_hidden_dim=512,
+        target_layers=(512, 512, 512),  # Target network architecture
+        predictor_layers=(512, 512, 512),  # Predictor network architecture
         device=str(device),
         max_length=8192,
         concat_problem_answer=True,
-        separator=" [SEP] "
+        separator=" [SEP] ",
+        normalize_embeddings=False  # Default: no embedding normalization (safest)
     )
     # Initialize optimizer for RND predictor network
     novelty_model_optimizer = torch.optim.Adam(novelty_model.predictor_parameters(), lr=1e-4)
@@ -1503,10 +1544,27 @@ async def main(
     tokenizer = training_client.get_tokenizer()
 
     # Create dataset from thunk
-    dataset, maybe_test_dataset = await cfg.dataset_builder()
+    # The dataset_builder returns (train_dataset, test_datasets) where test_datasets
+    # can be:
+    #   - None (no test dataset)
+    #   - A single RLDataset (backward compatible)
+    #   - A list of RLDatasets (for mixed training with multiple test sets)
+    dataset, maybe_test_datasets = await cfg.dataset_builder()
     evaluators = [evaluator() for evaluator in cfg.evaluator_builders]
-    if maybe_test_dataset is not None:
-        evaluators.append(RLTestSetEvaluator(maybe_test_dataset, max_tokens=cfg.max_tokens))
+    
+    # Handle test datasets - can be None, single dataset, or list of datasets
+    if maybe_test_datasets is not None:
+        if isinstance(maybe_test_datasets, list):
+            # Multiple test datasets (e.g., from MixedMathDatasetBuilder)
+            # Create separate evaluators for each with distinct names
+            test_dataset_names = ["math_test", "deepmath_test"]  # Default names for mixed mode
+            for i, test_ds in enumerate(maybe_test_datasets):
+                name = test_dataset_names[i] if i < len(test_dataset_names) else f"test_{i}"
+                evaluators.append(RLTestSetEvaluator(test_ds, max_tokens=cfg.max_tokens, name=name))
+            logger.info(f"Added {len(maybe_test_datasets)} test set evaluators: {test_dataset_names[:len(maybe_test_datasets)]}")
+        else:
+            # Single test dataset (backward compatible)
+            evaluators.append(RLTestSetEvaluator(maybe_test_datasets, max_tokens=cfg.max_tokens))
 
     num_batches = len(dataset)
     logger.info(f"Will train on {num_batches} batches")

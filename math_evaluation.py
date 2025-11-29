@@ -682,10 +682,11 @@ class EvalConfig:
     """Configuration for multi-evaluator evaluation."""
 
     model_path: str | None = "tinker://a95b9543-d0b1-46c7-a5ab-7baa62d92906/sampler_weights/final"
+    model_path: str | None = None
     model_name: str = "Qwen/Qwen3-30B-A3B"
     renderer_name: str = "qwen3"
     max_tokens: int = 2048
-    group_size: int = 4
+    group_size: int = 2
     log_path: str | None = None
     save_detailed_results: bool = True
     num_groups_to_log: int = 4

@@ -82,7 +82,7 @@ Verdict rules:
 Output requirements (strict):
 - Return exactly one valid JSON object and nothing else.
 - The object must contain exactly two fields:
-  {{ "explanation": "<short justification, 1-3 sentences>", "verdict": "correct" | "incorrect" | "uncertain" }}
+  {{ "explanation": "<short justification, 2-4 sentences>", "verdict": "correct" | "incorrect" | "uncertain" }}
 - Do NOT include any additional text, markdown, code fences, or fields.
 - Keep the explanation factual and cite the key reason (e.g., wrong arithmetic step, missing assumption, matches reference).
 
@@ -152,7 +152,7 @@ class GeminiJudge:
     
     def __init__(
         self, 
-        model_name: str = "gemini-2.0-flash-lite", 
+        model_name: str = "gemini-2.5-flash-lite", 
         system_prompt: Optional[Callable[[str, str], str]] = GEMINI_MATH_JUDGE_SYSTEM_PROMPT
     ):
         """

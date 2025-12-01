@@ -13,12 +13,16 @@ The implementations are intentionally simple and self-contained so they can be
 used as building blocks in RL/GRPO training loops.
 """
 
+import logging
+import gc
 import torch
 import torch.nn as nn
 import pickle
 from pathlib import Path
 from typing import Tuple, List, Iterator, Optional, Dict
 from encoder import Encoder
+
+logger = logging.getLogger(__name__)
 
 
 class RunningMeanStd(nn.Module):
@@ -453,9 +457,9 @@ class RNDBuffer:
         self.num_batches_stored = 0  # Current number of batches in buffer (0 to max_batches)
         self.write_batch_idx = 0     # Next batch slot to write to (circular: 0 to max_batches-1)
         
-        print(f"[RNDBuffer] Initialized: max_batches={max_batches}, batch_size={batch_size}, "
+        logger.info(f"[RNDBuffer] Initialized: max_batches={max_batches}, batch_size={batch_size}, "
               f"group_size={group_size}, embedding_dim={embedding_dim}")
-        print(f"[RNDBuffer] Capacity: {self.max_problems} problems, {self.max_responses} responses")
+        logger.info(f"[RNDBuffer] Capacity: {self.max_problems} problems, {self.max_responses} responses")
     
     def add_batch(
         self,
@@ -645,7 +649,7 @@ class SemanticRND(nn.Module):
         self.normalize_embeddings = normalize_embeddings
         
         # 1. Initialize the encoder
-        print(f"[SemanticRND] Initializing encoder: {encoder_model_name}")
+        logger.info(f"[SemanticRND] Initializing encoder: {encoder_model_name}")
         self.encoder = Encoder(
             model_name=encoder_model_name,
             device=self.device,
@@ -684,8 +688,14 @@ class SemanticRND(nn.Module):
                 embedding_load_file
             )
             self.initialize_embedding_normalizer(initial_embeddings)
+            # Free memory - embeddings are only needed to compute normalization stats
+            del initial_embeddings
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            logger.info("[SemanticRND] Freed memory from initial embeddings after normalizer initialization")
         
-        print(f"[SemanticRND] Initialization complete!")
+        logger.info(f"[SemanticRND] Initialization complete!")
     
     def _load_and_prepare_embeddings_for_normalizer(
         self, 
@@ -705,7 +715,7 @@ class SemanticRND(nn.Module):
         if not filepath.exists():
             raise FileNotFoundError(f"Embeddings file not found: {filepath}")
         
-        print(f"[SemanticRND] Loading embeddings from {filepath}...")
+        logger.info(f"[SemanticRND] Loading embeddings from {filepath}...")
         with open(filepath, 'rb') as f:
             embeddings_data = pickle.load(f)
         
@@ -726,7 +736,7 @@ class SemanticRND(nn.Module):
         # Combine all training embeddings for normalization stats
         all_embeddings = torch.cat([train_sol1_embs, train_sol2_embs, train_sol3_embs], dim=0)
 
-        print(f"[SemanticRND] Loaded {all_embeddings.shape[0]} embeddings for normalizer initialization")
+        logger.info(f"[SemanticRND] Loaded {all_embeddings.shape[0]} embeddings for normalizer initialization")
         return all_embeddings
     
     def predictor_parameters(self) -> Iterator[nn.Parameter]:
@@ -753,7 +763,7 @@ class SemanticRND(nn.Module):
         
         """
         if not self.normalize_embeddings:
-            print("[SemanticRND] Embedding normalization is disabled; skipping initialization.")
+            logger.info("[SemanticRND] Embedding normalization is disabled; skipping initialization.")
             return
         
         # Initialize RND's embedding normalizer with these embeddings
@@ -916,7 +926,8 @@ class SemanticRND(nn.Module):
     def encode_batch_separately(
         self,
         problems: List[str],
-        responses: List[str]
+        responses: List[str],
+        response_batch_size: int = 256
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encode problems and responses separately for buffer-based training.
@@ -927,6 +938,8 @@ class SemanticRND(nn.Module):
         Args:
             problems: List of B problem strings (one per problem in batch)
             responses: List of B*G response strings (G responses per problem)
+            response_batch_size: Maximum number of responses to encode at once
+                                to avoid OOM errors. Default is 256.
         
         Returns:
             problem_embs: Tensor of shape [B, embedding_dim]
@@ -940,12 +953,37 @@ class SemanticRND(nn.Module):
                 return_numpy=False
             )  # [B, embedding_dim]
             
-            response_embs = self.encoder.encode(
-                responses,
-                pooling="auto",
-                normalize=True,
-                return_numpy=False
-            )  # [B*G, embedding_dim]
+            # Encode responses in smaller batches to avoid OOM errors
+            num_responses = len(responses)
+            batch_size = min(response_batch_size, num_responses)
+            num_batches = (num_responses + batch_size - 1) // batch_size
+            
+            logger.info(f"[SemanticRND] Encoding {num_responses} responses in {num_batches} batch(es) of size {batch_size}")
+            
+            if num_responses <= batch_size:
+                # Small enough to encode all at once
+                response_embs = self.encoder.encode(
+                    responses,
+                    pooling="auto",
+                    normalize=True,
+                    return_numpy=False
+                )  # [B*G, embedding_dim]
+                logger.info(f"[SemanticRND] Encoded batch 1/{num_batches} (responses 1-{num_responses})")
+            else:
+                # Encode in chunks and concatenate
+                response_emb_chunks = []
+                for i in range(0, num_responses, batch_size):
+                    chunk = responses[i:i + batch_size]
+                    chunk_embs = self.encoder.encode(
+                        chunk,
+                        pooling="auto",
+                        normalize=True,
+                        return_numpy=False
+                    )
+                    response_emb_chunks.append(chunk_embs)
+                    batch_num = i // batch_size + 1
+                    logger.info(f"[SemanticRND] Encoded batch {batch_num}/{num_batches} (responses {i+1}-{i+len(chunk)})")
+                response_embs = torch.cat(response_emb_chunks, dim=0)  # [B*G, embedding_dim]
         
         return problem_embs, response_embs
     

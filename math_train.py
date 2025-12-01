@@ -21,20 +21,20 @@ class CLIConfig:
     """Simple command-line configuration for RL training."""
 
     # Model configuration
-    model_name: str = "meta-llama/Llama-3.2-1B"
+    model_name: str = "meta-llama/Llama-3.2-3B"
     lora_rank: int = 32
     renderer_name: str | None = None
     load_checkpoint_path: str | None = None
 
     # Environment configuration
-    env: str = "math"  # Options: arithmetic, math, polaris, deepmath, gsm8k, mixed
+    env: str = "mixed"  # Options: arithmetic, math, polaris, deepmath, gsm8k, mixed
     seed: int = 0  # Random seed for data shuffling
 
     # Training hyperparameters
-    group_size: int = 4
-    groups_per_batch: int = 8
-    learning_rate: float = 1e-5
-    max_tokens: int = 512
+    group_size: int = 16
+    groups_per_batch: int = 128
+    learning_rate: float = 7e-5
+    max_tokens: int = 2048
     kl_penalty_coef: float = 0.0
 
     # Number of optimizer steps per training iteration.
@@ -43,8 +43,8 @@ class CLIConfig:
 
     # Logging configuration
     log_path: str | None = None
-    wandb_project: str | None = "math_train"
-    wandb_name: str | None = "first_run"
+    wandb_project: str | None = "rnd_train"
+    wandb_name: str | None = "Llama-3B"
     compute_post_kl: bool = False
 
     # Evals
@@ -63,13 +63,26 @@ class CLIConfig:
 
     # BEGIN REASONING CODE
     # Reasoning reward configuration
-    use_reasoning_rewards: bool = False
+    use_reasoning_rewards: bool = True
     reasoning_reward_coef: float = 0.5
     # END REASONING CODE
 
+    # BEGIN SEMANTIC_RND CODE
+    # RND Buffer-based training configuration
+    use_rnd_curiosity: bool = True  # Whether to use RND-based curiosity rewards
+    rnd_buffer_size_multiplier: int = 5  # S = buffer holds S batches of rollouts
+    rnd_update_steps: int = 50  # K = number of RND gradient updates per LLM batch
+    rnd_minibatch_size: int = min(1024, group_size * groups_per_batch)  # N = samples per RND update (default = B*G)
+    curiosity_reward_coef: float = 0.2  # Coefficient for curiosity rewards
+    rnd_learning_rate: float = 1e-3  # Learning rate for RND predictor
+    penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
+    correctness_threshold: float = 0.6  # Threshold for determining correctness (reward >= threshold)
+    curiosity_warmup_batches: int = 20  # Number of batches before curiosity rewards are added (RND still trains during warmup)
+    # END SEMANTIC_RND CODE
+
     # Mixed dataset configuration (only used when env="mixed")
-    math_train_size: int | None = None  # None = use all ~12000 Math samples
-    deepmath_train_size: int = 8000
+    math_train_size: int | None = 6000  # None = use all ~12000 Math samples
+    deepmath_train_size: int = 6000
     deepmath_test_size: int = 500
     deepmath_seed: int = 42
 
@@ -190,6 +203,18 @@ async def cli_main(cli_config: CLIConfig):
         use_reasoning_rewards=cli_config.use_reasoning_rewards,
         reasoning_reward_coef=cli_config.reasoning_reward_coef,
         # END REASONING CODE
+        # BEGIN SEMANTIC_RND CODE
+        use_rnd_curiosity=cli_config.use_rnd_curiosity,
+        rnd_buffer_size_multiplier=cli_config.rnd_buffer_size_multiplier,
+        rnd_update_steps=cli_config.rnd_update_steps,
+        rnd_minibatch_size=cli_config.rnd_minibatch_size,
+        curiosity_reward_coef=cli_config.curiosity_reward_coef,
+        rnd_learning_rate=cli_config.rnd_learning_rate,
+        group_size=cli_config.group_size,
+        penalize_incorrect_novelty=cli_config.penalize_incorrect_novelty,
+        correctness_threshold=cli_config.correctness_threshold,
+        curiosity_warmup_batches=cli_config.curiosity_warmup_batches,
+        # END SEMANTIC_RND CODE
     )
 
     cli_utils.check_log_dir(log_path, behavior_if_exists=cli_config.behavior_if_log_dir_exists)

@@ -36,6 +36,7 @@ from tinker_cookbook.rl.types import (
     RLDatasetBuilder,
     TrajectoryGroup,
 )
+from tinker_cookbook.rl.problem_env import ProblemEnv
 from tinker_cookbook.tokenizer_utils import Tokenizer
 from tinker_cookbook.utils import logtree, ml_log
 from tinker_cookbook.utils.misc_utils import safezip, split_list, timed
@@ -43,14 +44,70 @@ from tinker_cookbook.utils.trace import scope, trace_init, get_scope_context
 from contextlib import contextmanager
 from encoder import Encoder
 # BEGIN SEMANTIC_RND CODE
-from rnd import SemanticRND
+from rnd import (
+    SemanticRND, 
+    RNDBuffer, 
+    normalize_rewards_stratified_groupwise, 
+    apply_signed_curiosity_rewards
+)
 # END SEMANTIC_RND CODE
 from llm_as_a_judge import GeminiJudge, JudgeResult
+from rnd import RNDBuffer
 
 logger = logging.getLogger(__name__)
 
 
 # BEGIN ADDED CODE
+# BEGIN SEMANTIC_RND CODE
+@scope
+async def extract_problems_and_responses_separately(
+    trajectory_groups_P: list[TrajectoryGroup],
+    env_group_builders_P: Sequence[EnvGroupBuilder],
+    tokenizer: Tokenizer,
+) -> Tuple[List[str], List[str]]:
+    """
+    Extract problems and responses as separate flat lists for buffer-based RND training.
+    
+    Args:
+        trajectory_groups_P: List of trajectory groups (B groups, each with G trajectories)
+        env_group_builders_P: List of environment group builders (B builders)
+        tokenizer: Tokenizer for decoding tokens
+        
+    Returns:
+        Tuple[List[str], List[str]]:
+            - problems_B: List of B unique problems (one per group)
+            - responses_BG: List of B*G responses (flattened, G responses per problem)
+    """
+    from tinker_cookbook.rl.problem_env import ProblemEnv
+    
+    problems_B = []
+    responses_BG = []
+    
+    for env_group_builder, traj_group in safezip(env_group_builders_P, trajectory_groups_P):
+        # Create environments to access get_question()
+        envs = await env_group_builder.make_envs()
+        
+        # Get problem from first env (all envs in group have same problem)
+        first_env = envs[0]
+        if isinstance(first_env, ProblemEnv):
+            problem = first_env.get_question()
+        else:
+            problem = ""
+        problems_B.append(problem)
+        
+        # Extract all G responses for this problem
+        for env, trajectory in safezip(envs, traj_group.trajectories_G):
+            if len(trajectory.transitions) > 0:
+                last_action_tokens = trajectory.transitions[-1].ac.tokens
+                response = tokenizer.decode(last_action_tokens)
+            else:
+                response = ""
+            responses_BG.append(response)
+    
+    return problems_B, responses_BG
+# END SEMANTIC_RND CODE
+
+
 # BEGIN SEMANTIC_RND CODE
 @scope
 async def extract_responses_from_trajectories(
@@ -381,6 +438,17 @@ class Config:
     # Reasoning reward configuration
     use_reasoning_rewards: bool = False  # Whether to use LLM-as-judge for reasoning rewards
     reasoning_reward_coef: float = 0.5  # Weight for reasoning rewards vs correctness (0.5 = equal weight)
+    
+    # RND Buffer-based training configuration
+    use_rnd_curiosity: bool = True  # Whether to use RND-based curiosity rewards
+    rnd_buffer_size_multiplier: int = 5  # S = buffer holds S batches of rollouts
+    rnd_update_steps: int = 50  # K = number of RND gradient updates per LLM batch
+    rnd_minibatch_size: int = 2048  # N = samples per RND update (default = B*G)
+    curiosity_reward_coef: float = 0.1  # Coefficient for curiosity rewards
+    rnd_learning_rate: float = 1e-4  # Learning rate for RND predictor
+    group_size: int = 16  # G = number of rollouts per problem
+    penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
+    correctness_threshold: float = 0.5  # Threshold for determining correctness (reward >= threshold)
     # END SEMANTIC_RND CODE
 
 
@@ -441,10 +509,13 @@ async def do_sync_training_with_stream_minibatch(
     tokenizer: Tokenizer,
     # BEGIN SEMANTIC_RND CODE
     novelty_model: SemanticRND | None = None,
-    novelty_model_optimizer: torch.optim.Optimizer | None = None,
     intrinsic_reward_coef: float = 0.1,
     gemini_judge: GeminiJudge | None = None,
     reasoning_reward_coef: float = 0.5,
+    rnd_buffer: RNDBuffer | None = None,
+    rnd_update_steps: int = 50,
+    penalize_incorrect_novelty: bool = True,
+    correctness_threshold: float = 0.5,
     # END SEMANTIC_RND CODE
 ):
     """
@@ -532,10 +603,13 @@ async def do_sync_training_with_stream_minibatch(
                 service_client,
                 tokenizer,
                 novelty_model=novelty_model,
-                novelty_model_optimizer=novelty_model_optimizer,
                 intrinsic_reward_coef=intrinsic_reward_coef,
                 gemini_judge=gemini_judge,
                 reasoning_reward_coef=reasoning_reward_coef,
+                rnd_buffer=rnd_buffer,
+                rnd_update_steps=rnd_update_steps,
+                penalize_incorrect_novelty=penalize_incorrect_novelty,
+                correctness_threshold=correctness_threshold,
             )
             # END SEMANTIC_RND CODE
 
@@ -578,11 +652,14 @@ async def do_async_training(
     tokenizer: Tokenizer,
     # BEGIN SEMANTIC_RND CODE
     novelty_model: SemanticRND | None = None,
-    # END SEMANTIC_RND CODE
-    novelty_model_optimizer: torch.optim.Optimizer | None = None,
     intrinsic_reward_coef: float = 0.1,
     gemini_judge: GeminiJudge | None = None,
     reasoning_reward_coef: float = 0.5,
+    rnd_buffer: RNDBuffer | None = None,
+    rnd_update_steps: int = 50,
+    penalize_incorrect_novelty: bool = True,
+    correctness_threshold: float = 0.5,
+    # END SEMANTIC_RND CODE
 ):
     """
     Implements async off-policy training, capped at K steps off policy.
@@ -599,14 +676,15 @@ async def do_async_training(
         ml_logger: ML logger for metrics
         tokenizer: Tokenizer
         novelty_model: Optional SemanticRND module for intrinsic rewards
-        novelty_model_optimizer: Optimizer for the novelty model
         intrinsic_reward_coef: Coefficient for intrinsic rewards
         gemini_judge: Optional GeminiJudge for reasoning-level rewards
         reasoning_reward_coef: Coefficient for weighting reasoning rewards vs correctness rewards
+        rnd_buffer: Buffer for storing embeddings for RND training
+        rnd_update_steps: Number of RND update steps (K) per batch
+        penalize_incorrect_novelty: Whether to apply negative reward for incorrect novel responses
+        correctness_threshold: Threshold for determining correctness (reward >= threshold)
     """
     assert cfg.async_config is not None
-# END SEMANTIC_RND CODE
-# END ADDED CODE
 
     shutdown_event = asyncio.Event()
     # We will have groups_per_batch worker generating rollouts, so cap the
@@ -730,6 +808,7 @@ async def do_async_training(
             nonlocal sampling_client
             nonlocal sampling_client_step
             if cfg.stream_minibatch_config is not None:
+                # BEGIN SEMANTIC_RND CODE
                 (
                     sampling_client,
                     train_step_metrics,
@@ -741,7 +820,16 @@ async def do_async_training(
                     service_client,
                     tokenizer,
                     filter_stale_trajectory_group,
+                    novelty_model=novelty_model,
+                    intrinsic_reward_coef=intrinsic_reward_coef,
+                    gemini_judge=gemini_judge,
+                    reasoning_reward_coef=reasoning_reward_coef,
+                    rnd_buffer=rnd_buffer,
+                    rnd_update_steps=rnd_update_steps,
+                    penalize_incorrect_novelty=penalize_incorrect_novelty,
+                    correctness_threshold=correctness_threshold,
                 )
+                # END SEMANTIC_RND CODE
             else:
                 if not filter_stale_trajectory_group(wrapped_trajectory_group):
                     continue
@@ -773,10 +861,13 @@ async def do_async_training(
                     [g.env_group_builder for g in wrapped_trajectory_groups],
                     [g.trajectory_group for g in wrapped_trajectory_groups],
                     novelty_model=novelty_model,
-                    novelty_model_optimizer=novelty_model_optimizer,
                     intrinsic_reward_coef=intrinsic_reward_coef,
                     gemini_judge=gemini_judge,
                     reasoning_reward_coef=reasoning_reward_coef,
+                    rnd_buffer=rnd_buffer,
+                    rnd_update_steps=rnd_update_steps,
+                    penalize_incorrect_novelty=penalize_incorrect_novelty,
+                    correctness_threshold=correctness_threshold,
                 )
                 # END SEMANTIC_RND CODE
                 # END ADDED CODE
@@ -887,9 +978,21 @@ async def prepare_minibatch(
     gemini_judge: GeminiJudge | None = None,
     reasoning_reward_coef: float = 0.5,
     i_batch: int = 0,
-) -> tuple[list[tinker.Datum], dict[str, Any], torch.Tensor | None]:
+    rnd_buffer: RNDBuffer | None = None,
+    rnd_update_steps: int = 50,
+    penalize_incorrect_novelty: bool = True,
+    correctness_threshold: float = 0.5,
+) -> tuple[list[tinker.Datum], dict[str, Any]]:
     """
     Converts the trajectories into a minibatch, and provides metrics about the minibatch.
+    
+    Uses buffer-based RND training:
+    1. Extract problems (B) and responses (B*G) separately
+    2. Encode embeddings for current batch
+    3. Compute intrinsic rewards BEFORE training (using current RND state)
+    4. Apply stratified normalization within each group's correct/incorrect subsets
+    5. Add embeddings to buffer
+    6. Train RND for K steps sampling from buffer
     
     Args:
         env_group_builders_P: Sequence of environment group builders
@@ -904,9 +1007,13 @@ async def prepare_minibatch(
         gemini_judge: Optional GeminiJudge for reasoning-level rewards
         reasoning_reward_coef: Coefficient for weighting reasoning rewards vs correctness rewards
         i_batch: Current batch index for logging purposes
+        rnd_buffer: Buffer for storing embeddings for RND training
+        rnd_update_steps: Number of RND update steps (K) per batch
+        penalize_incorrect_novelty: Whether to apply negative reward for incorrect novel responses
+        correctness_threshold: Threshold for determining correctness (reward >= threshold)
         
     Returns:
-        Tuple of (training data, metrics dict, rnd_loss_tensor or None)
+        Tuple of (training data, metrics dict)
     """
 # END SEMANTIC_RND CODE
 
@@ -921,135 +1028,232 @@ async def prepare_minibatch(
 
     # BEGIN SEMANTIC_RND CODE
     # Compute reasoning-level rewards using GeminiJudge if provided
+    # Only judge trajectories with correct answers (reward >= 0.9) to save API costs
     if gemini_judge is not None:
         with timed("compute_reasoning_rewards", metrics):
-            # Extract questions, references, and answers from trajectories
-            questions, references, answers = await extract_questions_references_answers_from_trajectories(
-                trajectory_groups_P, env_group_builders_P, tokenizer
-            )
             
-            logger.info(f"Calling GeminiJudge on {len(questions)} trajectories...")
+            # Step 1: Identify correct trajectories and extract their data inline
+            # This avoids calling make_envs() for trajectories we won't judge
+            correct_indices: list[tuple[int, int]] = []  # (traj_group_idx, traj_idx)
+            filtered_questions: list[str] = []
+            filtered_references: list[str] = []
+            filtered_answers: list[str] = []
+            total_trajectories = 0
             
-            # Call judge_batch to evaluate reasoning
-            judge_results: list[JudgeResult] = gemini_judge.judge_batch(
-                questions=questions,
-                answers=answers,
-                references=references,
-                filename_fingerprint=f"batch_{i_batch:06d}_{len(questions)}",
-                retry_on_error=False,
-            )
+            for tg_idx, (env_group_builder, traj_group) in enumerate(safezip(env_group_builders_P, trajectory_groups_P)):
+                total_trajectories += len(traj_group.final_rewards_G)
+                
+                # Check if any trajectories in this group are correct
+                has_correct = any(reward >= 0.9 for reward in traj_group.final_rewards_G)
+                if not has_correct:
+                    continue
+                
+                # Only create envs if we have correct trajectories in this group
+                envs = await env_group_builder.make_envs()
+                
+                for t_idx, (env, trajectory, reward) in enumerate(safezip(
+                    envs, traj_group.trajectories_G, traj_group.final_rewards_G
+                )):
+                    if reward >= 0.9 and isinstance(env, ProblemEnv):
+                        correct_indices.append((tg_idx, t_idx))
+                        filtered_questions.append(env.get_question())
+                        # Use get_reference_solution if available, else get_reference_answer
+                        ref_fn = getattr(env, 'get_reference_solution', None) or env.get_reference_answer #TODO: VERIFY IF CORRECT -- SEEMS OKAY
+                        filtered_references.append(ref_fn())
+                        # Extract model's response
+                        if len(trajectory.transitions) > 0:
+                            filtered_answers.append(tokenizer.decode(trajectory.transitions[-1].ac.tokens))
+                        else:
+                            filtered_answers.append("")
             
-            # Convert verdicts to float rewards
-            verdict_to_reward = {
-                "correct": 1.0,
-                "incorrect": 0.0,
-                "uncertain": 0.2,
-            }
+            num_correct_answers = len(correct_indices)
+            num_skipped = total_trajectories - num_correct_answers
             
-            reasoning_rewards = [
-                verdict_to_reward.get(result.verdict.value.lower(), 0.0) #FIXME: DEFAULT TO 0.0 IF UNKNOWN VERDICT
-                for result in judge_results
-            ]
-            
-            # Combine reasoning rewards with existing correctness rewards
-            # Store original correctness rewards for metrics
-            original_correctness_rewards = []
-            idx = 0
-            for traj_group in trajectory_groups_P:
-                for i in range(len(traj_group.final_rewards_G)):
-                    if idx < len(reasoning_rewards):
-                        original_reward = traj_group.final_rewards_G[i]
-                        original_correctness_rewards.append(original_reward)
-                        
-                        # Combine: reasoning_coef * judge_reward + (1 - reasoning_coef) * correctness_reward
-                        combined_reward = (
-                            reasoning_reward_coef * reasoning_rewards[idx] +
-                            (1 - reasoning_reward_coef) * original_reward
-                        )
-                        traj_group.final_rewards_G[i] = combined_reward
-                        idx += 1
-            
-            # Compute reasoning metrics
-            num_correct_reasoning = sum(1 for r in reasoning_rewards if r == 1.0)
-            num_incorrect_reasoning = sum(1 for r in reasoning_rewards if r == 0.0)
-            num_uncertain_reasoning = sum(1 for r in reasoning_rewards if r == 0.2)
-            
-            # Count how many correct answers have correct reasoning
-            num_correct_answer_correct_reasoning = sum(
-                1 for orig_r, judge_r in zip(original_correctness_rewards, reasoning_rewards)
-                if orig_r > 0.5 and judge_r == 1.0
-            )
-            num_correct_answer_incorrect_reasoning = sum(
-                1 for orig_r, judge_r in zip(original_correctness_rewards, reasoning_rewards)
-                if orig_r > 0.5 and judge_r == 0.0
-            )
-            num_correct_answer_uncertain_reasoning = sum(
-                1 for orig_r, judge_r in zip(original_correctness_rewards, reasoning_rewards)
-                if orig_r > 0.5 and judge_r == 0.2
-            )
-            
-            num_correct_answers = sum(1 for r in original_correctness_rewards if r > 0.5)
-            
-            # Log reasoning metrics
-            metrics["reasoning/reward_mean"] = np.mean(reasoning_rewards)
-            metrics["reasoning/reward_std"] = np.std(reasoning_rewards)
-            metrics["reasoning/correct_frac"] = num_correct_reasoning / len(reasoning_rewards) if len(reasoning_rewards) > 0 else 0.0
-            metrics["reasoning/incorrect_frac"] = num_incorrect_reasoning / len(reasoning_rewards) if len(reasoning_rewards) > 0 else 0.0
-            metrics["reasoning/uncertain_frac"] = num_uncertain_reasoning / len(reasoning_rewards) if len(reasoning_rewards) > 0 else 0.0
-            
-            # Metrics for correct answers
+            # Step 2: Only call judge if we have correct trajectories
             if num_correct_answers > 0:
-                metrics["reasoning/correct_answer_correct_reasoning_frac"] = num_correct_answer_correct_reasoning / num_correct_answers
-                metrics["reasoning/correct_answer_incorrect_reasoning_frac"] = num_correct_answer_incorrect_reasoning / num_correct_answers
-                metrics["reasoning/correct_answer_uncertain_reasoning_frac"] = num_correct_answer_uncertain_reasoning / num_correct_answers
+                logger.info(f"Calling GeminiJudge on {num_correct_answers}/{total_trajectories} correct trajectories (skipping {num_skipped} incorrect)...")
+                
+                judge_results: list[JudgeResult] = gemini_judge.judge_batch(
+                    questions=filtered_questions,
+                    answers=filtered_answers,
+                    references=filtered_references,
+                    filename_fingerprint=f"batch_{i_batch:06d}_{num_correct_answers}",
+                    retry_on_error=False,
+                )
+                
+                # Convert verdicts to float rewards
+                verdict_to_reward = {
+                    "correct": 1.0,
+                    "incorrect": 0.0,
+                    "uncertain": 0.2,
+                }
+                
+                reasoning_rewards = [
+                    verdict_to_reward.get(result.verdict.value.lower(), 0.0)
+                    for result in judge_results
+                ]
+                
+                # Step 3: Update rewards only for judged (correct) trajectories
+                for i, (tg_idx, t_idx) in enumerate(correct_indices):
+                    original_reward = trajectory_groups_P[tg_idx].final_rewards_G[t_idx]
+                    judge_reward = reasoning_rewards[i]
+                    # Combine: reasoning_coef * judge_reward + (1 - reasoning_coef) * correctness_reward
+                    combined_reward = (
+                        reasoning_reward_coef * judge_reward +
+                        (1 - reasoning_reward_coef) * original_reward
+                    )
+                    trajectory_groups_P[tg_idx].final_rewards_G[t_idx] = combined_reward
+                
+                # Step 4: Compute reasoning metrics (only for judged trajectories)
+                num_correct_reasoning = sum(1 for r in reasoning_rewards if r == 1.0)
+                num_incorrect_reasoning = sum(1 for r in reasoning_rewards if r == 0.0)
+                num_uncertain_reasoning = sum(1 for r in reasoning_rewards if r == 0.2)
+                
+                # Log reasoning metrics
+                metrics["reasoning/num_judged"] = num_correct_answers
+                metrics["reasoning/num_skipped"] = num_skipped
+                metrics["reasoning/reward_mean"] = np.mean(reasoning_rewards)
+                metrics["reasoning/reward_std"] = np.std(reasoning_rewards)
+                metrics["reasoning/correct_frac"] = num_correct_reasoning / num_correct_answers
+                metrics["reasoning/incorrect_frac"] = num_incorrect_reasoning / num_correct_answers
+                metrics["reasoning/uncertain_frac"] = num_uncertain_reasoning / num_correct_answers
+                
+                logger.info(
+                    f"Reasoning evaluation complete: {num_correct_reasoning}/{num_correct_answers} correct reasoning, "
+                    f"{num_uncertain_reasoning}/{num_correct_answers} uncertain, "
+                    f"{num_incorrect_reasoning}/{num_correct_answers} incorrect reasoning"
+                )
             else:
-                metrics["reasoning/correct_answer_correct_reasoning_frac"] = 0.0
-                metrics["reasoning/correct_answer_incorrect_reasoning_frac"] = 0.0
-                metrics["reasoning/correct_answer_uncertain_reasoning_frac"] = 0.0
-            
-            # Overall combined metrics
-            metrics["reasoning/combined_reward_mean"] = np.mean([tg.final_rewards_G for tg in trajectory_groups_P])
-            
-            logger.info(f"Reasoning evaluation complete: {num_correct_reasoning}/{len(reasoning_rewards)} correct, "
-                       f"{num_uncertain_reasoning}/{len(reasoning_rewards)} uncertain, "
-                       f"{num_incorrect_reasoning}/{len(reasoning_rewards)} incorrect")
+                # No correct trajectories to judge
+                logger.info(f"Skipping GeminiJudge: no correct trajectories in batch (0/{total_trajectories})")
+                metrics["reasoning/num_judged"] = 0
+                metrics["reasoning/num_skipped"] = total_trajectories
+                metrics["reasoning/reward_mean"] = 0.0
+                metrics["reasoning/reward_std"] = 0.0
+                metrics["reasoning/correct_frac"] = 0.0
+                metrics["reasoning/incorrect_frac"] = 0.0
+                metrics["reasoning/uncertain_frac"] = 0.0
     # END SEMANTIC_RND CODE
 
     # BEGIN SEMANTIC_RND CODE
-    # Compute RND intrinsic rewards if novelty model is provided
-    rnd_loss_tensor = None
-    if novelty_model is not None:
+    # Buffer-based RND training with stratified normalization
+    # 1. Extract problems (B) and responses (B*G) separately
+    # 2. Encode embeddings for current batch
+    # 3. Compute intrinsic rewards BEFORE training (using current RND state)
+    # 4. Apply stratified normalization within each group's correct/incorrect subsets
+    # 5. Add embeddings to buffer
+    # 6. Train RND for K steps sampling from buffer
+    if novelty_model is not None and rnd_buffer is not None:
         with timed("compute_rnd_rewards", metrics):
-            # Extract (problem, response) pairs from trajectories
-            # Returns List[List[Tuple[str, str]]] for SemanticRND compatibility
-            problem_response_pairs = await extract_responses_from_trajectories(
+            # Validate concat_problem_answer mode
+            if novelty_model.concat_problem_answer:
+                raise ValueError(
+                    "Buffer-based RND training requires concat_problem_answer=False. "
+                    "Please initialize SemanticRND with concat_problem_answer=False."
+                )
+            
+            # Extract problems and responses separately
+            problems_B, responses_BG = await extract_problems_and_responses_separately(
                 trajectory_groups_P, env_group_builders_P, tokenizer
             )
             
-            # Get intrinsic rewards and RND loss from SemanticRND using forward method
-            intrinsic_rewards_tensor, rnd_loss_tensor = novelty_model(
-                problem_response_pairs,
-                update_stats=True
+            B = len(problems_B)
+            G = len(responses_BG) // B  # Number of rollouts per problem
+            
+            # Get current extrinsic rewards for determining correctness
+            extrinsic_rewards_BG = []
+            for traj_group in trajectory_groups_P:
+                extrinsic_rewards_BG.extend(traj_group.final_rewards_G)
+            extrinsic_rewards_BG = torch.tensor(extrinsic_rewards_BG, device=novelty_model.device)
+            
+            # Encode problems and responses separately
+            problem_embeddings_B, response_embeddings_BG = novelty_model.encode_problems_responses_separately(
+                problems_B, responses_BG
             )
             
-            # Convert to list for adding to rewards
-            intrinsic_rewards = intrinsic_rewards_tensor.detach().cpu().flatten().tolist()
+            # Compute stratified normalized rewards using current RND state (BEFORE training)
+            # This gives us rewards normalized within each group's correct/incorrect subsets
+            signed_intrinsic_rewards = novelty_model.compute_rewards_stratified_normalized(
+                problem_embeddings=problem_embeddings_B,
+                response_embeddings=response_embeddings_BG,
+                extrinsic_rewards=extrinsic_rewards_BG,
+                group_size=G,
+                curiosity_coef=intrinsic_reward_coef,
+                correctness_threshold=correctness_threshold,
+                penalize_incorrect=penalize_incorrect_novelty,
+            )
             
-            # Add intrinsic rewards to the trajectories' final rewards
+            # Determine correctness for buffer storage
+            is_correct_BG = extrinsic_rewards_BG >= correctness_threshold
+            
+            # Add embeddings to buffer (for later RND training)
+            rnd_buffer.add_batch(problem_embeddings_B, response_embeddings_BG, is_correct_BG)
+            
+            # Add signed intrinsic rewards to the trajectories
+            intrinsic_rewards_list = signed_intrinsic_rewards.detach().cpu().tolist()
             idx = 0
             for traj_group in trajectory_groups_P:
                 for i in range(len(traj_group.final_rewards_G)):
-                    if idx < len(intrinsic_rewards):
-                        # Combine extrinsic and intrinsic rewards
-                        traj_group.final_rewards_G[i] += intrinsic_reward_coef * intrinsic_rewards[idx]
+                    if idx < len(intrinsic_rewards_list):
+                        # intrinsic_rewards_list already has sign and coefficient applied
+                        traj_group.final_rewards_G[i] += intrinsic_rewards_list[idx]
                         idx += 1
             
-            # Log RND metrics (detach for logging only)
-            metrics["rnd/loss"] = rnd_loss_tensor.detach().cpu().item()
-            metrics["rnd/intrinsic_reward_mean"] = np.mean(intrinsic_rewards)
-            metrics["rnd/intrinsic_reward_std"] = np.std(intrinsic_rewards)
-            metrics["rnd/intrinsic_reward_min"] = np.min(intrinsic_rewards)
-            metrics["rnd/intrinsic_reward_max"] = np.max(intrinsic_rewards)
+            # Log reward metrics (split by correct/incorrect)
+            correct_mask = is_correct_BG.cpu().numpy()
+            raw_intrinsic = signed_intrinsic_rewards.detach().cpu().numpy()
+            
+            metrics["rnd/intrinsic_reward_mean"] = float(np.mean(raw_intrinsic))
+            metrics["rnd/intrinsic_reward_std"] = float(np.std(raw_intrinsic))
+            metrics["rnd/intrinsic_reward_min"] = float(np.min(raw_intrinsic))
+            metrics["rnd/intrinsic_reward_max"] = float(np.max(raw_intrinsic))
+            
+            if correct_mask.sum() > 0:
+                metrics["rnd/correct_reward_mean"] = float(np.mean(raw_intrinsic[correct_mask]))
+            else:
+                metrics["rnd/correct_reward_mean"] = 0.0
+                
+            if (~correct_mask).sum() > 0:
+                metrics["rnd/incorrect_reward_mean"] = float(np.mean(raw_intrinsic[~correct_mask]))
+            else:
+                metrics["rnd/incorrect_reward_mean"] = 0.0
+            
+            metrics["rnd/num_correct"] = int(correct_mask.sum())
+            metrics["rnd/num_incorrect"] = int((~correct_mask).sum())
+            buffer_stats = rnd_buffer.get_current_size()
+            metrics["rnd/buffer_num_responses"] = buffer_stats['num_responses']
+            
+        # Train RND from buffer (K update steps)
+        rnd_minibatch_size = B * G  # Default: sample same size as one batch
+        with timed("train_rnd_from_buffer", metrics):
+            rnd_losses = []
+            buffer_stats = rnd_buffer.get_current_size()
+            total_responses = buffer_stats['num_responses']
+            
+            if total_responses >= rnd_minibatch_size:
+                for k in range(rnd_update_steps):
+                    # Sample from buffer and train in one step
+                    loss = novelty_model.train_step_from_buffer(
+                        rnd_buffer, rnd_minibatch_size, novelty_model._optimizer
+                    )
+                    rnd_losses.append(loss)
+                
+                metrics["rnd/loss_mean"] = float(np.mean(rnd_losses))
+                metrics["rnd/loss_std"] = float(np.std(rnd_losses))
+                metrics["rnd/num_updates"] = rnd_update_steps
+                
+                logger.info(
+                    f"RND buffer training: {rnd_update_steps} updates, "
+                    f"loss={np.mean(rnd_losses):.4f}±{np.std(rnd_losses):.4f}, "
+                    f"buffer_size={total_responses}"
+                )
+            else:
+                metrics["rnd/loss_mean"] = 0.0
+                metrics["rnd/loss_std"] = 0.0
+                metrics["rnd/num_updates"] = 0
+                logger.info(
+                    f"RND buffer too small for training: {total_responses}/{rnd_minibatch_size} samples"
+                )
     # END SEMANTIC_RND CODE
 
     # Assemble training data
@@ -1069,7 +1273,7 @@ async def prepare_minibatch(
             )
         metrics.update(kl_penalty_metrics)
 
-    return data_D, metrics, rnd_loss_tensor
+    return data_D, metrics
 # END ADDED CODE
 
 
@@ -1123,10 +1327,13 @@ async def do_train_step_streaming_and_get_sampling_client(
     tokenizer: Tokenizer,
     trajectory_group_filter: Callable[[WrappedTrajectoryGroup | None], bool] = lambda _: True,
     novelty_model: SemanticRND | None = None,
-    novelty_model_optimizer: torch.optim.Optimizer | None = None,
     intrinsic_reward_coef: float = 0.1,
     gemini_judge: GeminiJudge | None = None,
     reasoning_reward_coef: float = 0.5,
+    rnd_buffer: RNDBuffer | None = None,
+    rnd_update_steps: int = 50,
+    penalize_incorrect_novelty: bool = True,
+    correctness_threshold: float = 0.5,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
 # END SEMANTIC_RND CODE
     """
@@ -1179,7 +1386,7 @@ async def do_train_step_streaming_and_get_sampling_client(
             # remove these and train on a smaller batch.
             wrapped_trajectory_groups = [g for g in wrapped_trajectory_groups if g is not None]
             # BEGIN SEMANTIC_RND CODE
-            data_D, prepare_minibatch_metrics, rnd_loss_tensor = await prepare_minibatch(
+            data_D, prepare_minibatch_metrics = await prepare_minibatch(
                 [g.env_group_builder for g in wrapped_trajectory_groups],
                 [g.trajectory_group for g in wrapped_trajectory_groups],
                 tokenizer,
@@ -1192,6 +1399,10 @@ async def do_train_step_streaming_and_get_sampling_client(
                 gemini_judge=gemini_judge,
                 reasoning_reward_coef=reasoning_reward_coef,
                 i_batch=i_batch,
+                rnd_buffer=rnd_buffer,
+                rnd_update_steps=rnd_update_steps,
+                penalize_incorrect_novelty=penalize_incorrect_novelty,
+                correctness_threshold=correctness_threshold,
             )
             # END SEMANTIC_RND CODE
             metrics.update(prepare_minibatch_metrics)
@@ -1215,14 +1426,7 @@ async def do_train_step_streaming_and_get_sampling_client(
         with timed(f"train/optim_substep_{i_substep}", metrics):
             await optim_step(training_client, cfg.learning_rate)
 
-    # BEGIN SEMANTIC_RND CODE
-    # Update RND model if provided (after all substeps)
-    if novelty_model is not None and novelty_model_optimizer is not None and rnd_loss_tensor is not None:
-        with timed("train_rnd", metrics):
-            novelty_model_optimizer.zero_grad()
-            rnd_loss_tensor.backward()
-            novelty_model_optimizer.step()
-    # END SEMANTIC_RND CODE
+    # RND training now happens inside prepare_minibatch via buffer-based approach
 
     # Aggregate metrics across the entire batch
     metrics.update(compute_sampling_client_metrics(all_wrapped_trajectory_groups))
@@ -1261,10 +1465,13 @@ async def do_train_step_and_get_sampling_client(
     env_group_builders_P: Sequence[EnvGroupBuilder],
     trajectory_groups_P: list[TrajectoryGroup],
     novelty_model: SemanticRND | None = None,
-    novelty_model_optimizer: torch.optim.Optimizer | None = None,
     intrinsic_reward_coef: float = 0.1,
     gemini_judge: GeminiJudge | None = None,
     reasoning_reward_coef: float = 0.5,
+    rnd_buffer: RNDBuffer | None = None,
+    rnd_update_steps: int = 50,
+    penalize_incorrect_novelty: bool = True,
+    correctness_threshold: float = 0.5,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
     """
     Perform a single training step and return updated sampling client.
@@ -1278,10 +1485,13 @@ async def do_train_step_and_get_sampling_client(
         env_group_builders_P: Environment group builders
         trajectory_groups_P: Trajectory groups to train on
         novelty_model: Optional SemanticRND module for intrinsic rewards
-        novelty_model_optimizer: Optimizer for the novelty model
         intrinsic_reward_coef: Coefficient for intrinsic rewards
         gemini_judge: Optional GeminiJudge for reasoning-level rewards
         reasoning_reward_coef: Coefficient for weighting reasoning rewards vs correctness rewards
+        rnd_buffer: Buffer for storing embeddings for RND training
+        rnd_update_steps: Number of RND update steps (K) per batch
+        penalize_incorrect_novelty: Whether to apply negative reward for incorrect novel responses
+        correctness_threshold: Threshold for determining correctness (reward >= threshold)
         
     Returns:
         Tuple of (sampling client, metrics dict)
@@ -1292,7 +1502,7 @@ async def do_train_step_and_get_sampling_client(
 
     metrics = {}
     # BEGIN SEMANTIC_RND CODE
-    data_D, prepare_minibatch_metrics, rnd_loss_tensor = await prepare_minibatch(
+    data_D, prepare_minibatch_metrics = await prepare_minibatch(
         env_group_builders_P,
         trajectory_groups_P,
         tokenizer,
@@ -1305,6 +1515,10 @@ async def do_train_step_and_get_sampling_client(
         gemini_judge=gemini_judge,
         reasoning_reward_coef=reasoning_reward_coef,
         i_batch=i_batch,
+        rnd_buffer=rnd_buffer,
+        rnd_update_steps=rnd_update_steps,
+        penalize_incorrect_novelty=penalize_incorrect_novelty,
+        correctness_threshold=correctness_threshold,
     )
     # END SEMANTIC_RND CODE
     metrics.update(prepare_minibatch_metrics)
@@ -1318,15 +1532,7 @@ async def do_train_step_and_get_sampling_client(
             cfg.loss_fn,
         )
 
-    # BEGIN SEMANTIC_RND CODE
-    # Update RND model if provided
-    # Single forward pass approach: reuse the tensor computed in prepare_minibatch
-    if novelty_model is not None and novelty_model_optimizer is not None and rnd_loss_tensor is not None:
-        with timed("train_rnd", metrics):
-            novelty_model_optimizer.zero_grad()
-            rnd_loss_tensor.backward()
-            novelty_model_optimizer.step()
-    # END SEMANTIC_RND CODE
+    # RND training now happens inside prepare_minibatch via buffer-based approach
 
     sampling_client, full_batch_metrics = await compute_full_batch_metrics_and_get_sampling_client(
         training_client,
@@ -1359,10 +1565,13 @@ async def do_sync_training(
     ml_logger: ml_log.Logger,
     tokenizer: Tokenizer,
     novelty_model: SemanticRND | None = None,
-    novelty_model_optimizer: torch.optim.Optimizer | None = None,
     intrinsic_reward_coef: float = 0.1,
     gemini_judge: GeminiJudge | None = None,
     reasoning_reward_coef: float = 0.5,
+    rnd_buffer: RNDBuffer | None = None,
+    rnd_update_steps: int = 50,
+    penalize_incorrect_novelty: bool = True,
+    correctness_threshold: float = 0.5,
 ):
     """
     Implements fully synchronous on-policy training.
@@ -1379,10 +1588,13 @@ async def do_sync_training(
         ml_logger: ML logger for metrics
         tokenizer: Tokenizer
         novelty_model: Optional SemanticRND module for intrinsic rewards
-        novelty_model_optimizer: Optimizer for the novelty model
         intrinsic_reward_coef: Coefficient for intrinsic rewards
         gemini_judge: Optional GeminiJudge for reasoning-level rewards
         reasoning_reward_coef: Coefficient for weighting reasoning rewards vs correctness rewards
+        rnd_buffer: Buffer for storing embeddings for RND training
+        rnd_update_steps: Number of RND update steps (K) per batch
+        penalize_incorrect_novelty: Whether to apply negative reward for incorrect novel responses
+        correctness_threshold: Threshold for determining correctness (reward >= threshold)
     """
 # END SEMANTIC_RND CODE
     # Initial sampling client
@@ -1448,10 +1660,13 @@ async def do_sync_training(
             env_group_builders_P,
             trajectory_groups_P,
             novelty_model=novelty_model,
-            novelty_model_optimizer=novelty_model_optimizer,
             intrinsic_reward_coef=intrinsic_reward_coef,
             gemini_judge=gemini_judge,
             reasoning_reward_coef=reasoning_reward_coef,
+            rnd_buffer=rnd_buffer,
+            rnd_update_steps=rnd_update_steps,
+            penalize_incorrect_novelty=penalize_incorrect_novelty,
+            correctness_threshold=correctness_threshold,
         )
         # END SEMANTIC_RND CODE
 
@@ -1497,19 +1712,24 @@ async def main(
     # BEGIN SEMANTIC_RND CODE
     # --- RND Initialization ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Initialize SemanticRND with encoder and RND networks
+    # IMPORTANT: concat_problem_answer=False is required for buffer-based training
+    # This mode stores problem and response embeddings separately for efficiency
     novelty_model = SemanticRND(
         encoder_model_name="Alibaba-NLP/gte-modernbert-base",
         target_layers=(512, 512, 512),  # Target network architecture
         predictor_layers=(512, 512, 512),  # Predictor network architecture
         device=str(device),
         max_length=8192,
-        concat_problem_answer=True,
+        concat_problem_answer=False,  # Required for buffer-based training
         separator=" [SEP] ",
         normalize_embeddings=False  # Default: no embedding normalization (safest)
     )
-    # Initialize optimizer for RND predictor network
-    novelty_model_optimizer = torch.optim.Adam(novelty_model.predictor_parameters(), lr=1e-4)
+    
+    # RND buffer will be initialized after dataset is created
+    rnd_buffer = None  # Placeholder
+    
     logger.info(f"Initialized SemanticRND module on {device}")
     # --- End RND Initialization ---
     # END SEMANTIC_RND CODE
@@ -1569,10 +1789,37 @@ async def main(
     num_batches = len(dataset)
     logger.info(f"Will train on {num_batches} batches")
 
+    # BEGIN SEMANTIC_RND CODE
+    # Initialize RND buffer now that we have the dataset
+    # Get batch size (B) from the first batch of the dataset
+    first_batch = dataset.get_batch(0)
+    batch_size = len(first_batch)  # B = number of problems per batch
+    group_size = cfg.group_size    # G = number of rollouts per problem
+    
+    # Get embedding dimension from the novelty model
+    embedding_dim = novelty_model.embedding_dim
+    assert embedding_dim is not None, "SemanticRND embedding_dim should not be None after initialization"
+    
+    # Buffer stores S batches of B*G responses
+    rnd_buffer = RNDBuffer(
+        max_batches=cfg.rnd_buffer_size_multiplier,  # S
+        batch_size=batch_size,                        # B
+        group_size=group_size,                        # G
+        embedding_dim=embedding_dim,                  # D (single embedding dimension)
+        device=str(device),
+    )
+    
+    logger.info(
+        f"Initialized RND buffer: max_batches={cfg.rnd_buffer_size_multiplier}, "
+        f"batch_size={batch_size}, group_size={group_size}, "
+        f"capacity={cfg.rnd_buffer_size_multiplier * batch_size * group_size} responses"
+    )
+    # END SEMANTIC_RND CODE
+
     # BEGIN ADDED CODE
     # BEGIN SEMANTIC_RND CODE
-    # RND configuration
-    intrinsic_reward_coef = 0.1  # Can be made configurable via Config class
+    # RND configuration - use config values
+    intrinsic_reward_coef = cfg.curiosity_reward_coef
     
     # Training loop
     if cfg.async_config is not None:
@@ -1593,10 +1840,13 @@ async def main(
         ml_logger=ml_logger,
         tokenizer=tokenizer,
         novelty_model=novelty_model,
-        novelty_model_optimizer=novelty_model_optimizer,
         intrinsic_reward_coef=intrinsic_reward_coef,
         gemini_judge=gemini_judge,
         reasoning_reward_coef=cfg.reasoning_reward_coef,
+        rnd_buffer=rnd_buffer,
+        rnd_update_steps=cfg.rnd_update_steps,
+        penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
+        correctness_threshold=cfg.correctness_threshold,
     )
     # END SEMANTIC_RND CODE
     # END ADDED CODE

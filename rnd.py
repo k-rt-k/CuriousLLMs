@@ -1,10 +1,11 @@
 """rnd.py
 
 Lightweight utilities for semantic novelty estimation using Random Network
-Distillation (RND). This file provides three main components:
+Distillation (RND). This file provides four main components:
 
 - RunningMeanStd: Online running mean/variance tracker for reward normalization.
 - RNDModule: Core RND implementation (target + predictor networks).
+- RNDBuffer: Circular FIFO buffer for storing embeddings and sampling minibatches.
 - SemanticRND: Integration of a frozen encoder with the RND module to compute
   intrinsic rewards for (problem, answer) text pairs.
 
@@ -14,7 +15,7 @@ used as building blocks in RL/GRPO training loops.
 
 import torch
 import torch.nn as nn
-from typing import Tuple, List, Iterator
+from typing import Tuple, List, Iterator, Optional, Dict
 from encoder import Encoder
 
 
@@ -360,6 +361,216 @@ class RNDModule(nn.Module):
         
         return normalized_rewards, predictor_loss
 
+    def train_step(self, embeddings_batch: torch.Tensor) -> torch.Tensor:
+        """
+        Perform a single training step on the predictor network.
+        
+        This method is used for buffer-based training where we sample from a replay
+        buffer and train the predictor to match the target network outputs.
+        
+        Args:
+            embeddings_batch: Tensor of shape [N, input_dim] - concatenated embeddings
+        
+        Returns:
+            loss: Scalar MSE loss tensor (with gradients for backprop)
+        """
+        embeddings_batch = embeddings_batch.to(self.device).detach()
+        
+        # Flatten to [N, E]
+        flat_embeddings = embeddings_batch.view(-1, self.input_dim)
+        
+        # Apply embedding normalization if enabled
+        if self.normalize_embeddings:
+            if not self.embedding_stats_frozen:
+                raise RuntimeError(
+                    "Embedding normalizer not initialized! Call initialize_embedding_normalizer() "
+                    "with initial data before training."
+                )
+            flat_embeddings = self.embedding_normalizer.normalize(flat_embeddings)
+        
+        # Forward through both networks
+        target_output = self.target_network(flat_embeddings).detach()
+        predictor_output = self.predictor_network(flat_embeddings)
+        
+        # Compute MSE loss
+        loss = (target_output - predictor_output).pow(2).mean()
+        
+        return loss
+
+
+class RNDBuffer:
+    """
+    Circular FIFO buffer for RND training with separate problem/response storage.
+    
+    This buffer stores problem and response embeddings separately, along with
+    correctness labels. When sampling, it reconstructs (problem, response) pairs
+    by using the implicit mapping: response[i] belongs to problem[i // group_size].
+    
+    The buffer automatically handles FIFO eviction when full - oldest batches are
+    overwritten by new ones.
+    
+    Memory Layout:
+        - problem_embs: [max_batches * batch_size, embedding_dim]
+        - response_embs: [max_batches * batch_size * group_size, embedding_dim]
+        - correctness: [max_batches * batch_size * group_size]
+    
+    Example:
+        >>> buffer = RNDBuffer(max_batches=5, batch_size=128, group_size=16, embedding_dim=768)
+        >>> buffer.add_batch(problem_embs, response_embs, correctness)  # Add B=128 problems, B*G=2048 responses
+        >>> sampled = buffer.sample(2048)  # Sample 2048 concatenated (problem, response) pairs
+    """
+    
+    def __init__(
+        self,
+        max_batches: int,
+        batch_size: int,
+        group_size: int,
+        embedding_dim: int,
+        device: str = 'cuda'
+    ):
+        """
+        Initialize the RND buffer.
+        
+        Args:
+            max_batches: S = buffer_size_multiplier (how many batches to store)
+            batch_size: B = number of problems per batch
+            group_size: G = number of rollouts per problem
+            embedding_dim: D = dimension of each embedding (problem and response separately)
+            device: Device to store tensors on
+        """
+        self.max_batches = max_batches
+        self.batch_size = batch_size
+        self.group_size = group_size
+        self.embedding_dim = embedding_dim
+        self.device = device
+        
+        # Compute sizes
+        self.problems_per_batch = batch_size
+        self.responses_per_batch = batch_size * group_size
+        self.max_problems = max_batches * batch_size
+        self.max_responses = max_batches * batch_size * group_size
+        
+        # Pre-allocate tensors (circular buffer storage)
+        self.problem_embs = torch.zeros(self.max_problems, embedding_dim, device=device)
+        self.response_embs = torch.zeros(self.max_responses, embedding_dim, device=device)
+        self.correctness = torch.zeros(self.max_responses, dtype=torch.bool, device=device)
+        
+        # Buffer state
+        self.num_batches_stored = 0  # Current number of batches in buffer (0 to max_batches)
+        self.write_batch_idx = 0     # Next batch slot to write to (circular: 0 to max_batches-1)
+        
+        print(f"[RNDBuffer] Initialized: max_batches={max_batches}, batch_size={batch_size}, "
+              f"group_size={group_size}, embedding_dim={embedding_dim}")
+        print(f"[RNDBuffer] Capacity: {self.max_problems} problems, {self.max_responses} responses")
+    
+    def add_batch(
+        self,
+        problem_embs: torch.Tensor,
+        response_embs: torch.Tensor,
+        correctness: torch.Tensor
+    ) -> None:
+        """
+        Add a batch of problems and responses to the buffer.
+        
+        If the buffer is full, the oldest batch is overwritten (FIFO).
+        
+        Args:
+            problem_embs: Tensor of shape [B, embedding_dim] - one embedding per problem
+            response_embs: Tensor of shape [B*G, embedding_dim] - one embedding per response
+            correctness: Tensor of shape [B*G] (bool) - True if response is correct
+        
+        Raises:
+            ValueError: If tensor shapes don't match expected dimensions
+        """
+        B = self.batch_size
+        G = self.group_size
+        
+        # Validate shapes
+        if problem_embs.shape != (B, self.embedding_dim):
+            raise ValueError(f"Expected problem_embs shape ({B}, {self.embedding_dim}), "
+                           f"got {problem_embs.shape}")
+        if response_embs.shape != (B * G, self.embedding_dim):
+            raise ValueError(f"Expected response_embs shape ({B * G}, {self.embedding_dim}), "
+                           f"got {response_embs.shape}")
+        if correctness.shape != (B * G,):
+            raise ValueError(f"Expected correctness shape ({B * G},), got {correctness.shape}")
+        
+        # Compute write positions for this batch slot
+        prob_start = self.write_batch_idx * B
+        resp_start = self.write_batch_idx * B * G
+        
+        # Write to buffer (overwrites oldest if full)
+        self.problem_embs[prob_start:prob_start + B] = problem_embs.to(self.device)
+        self.response_embs[resp_start:resp_start + B * G] = response_embs.to(self.device)
+        self.correctness[resp_start:resp_start + B * G] = correctness.to(self.device)
+        
+        # Update circular buffer state
+        self.write_batch_idx = (self.write_batch_idx + 1) % self.max_batches
+        self.num_batches_stored = min(self.num_batches_stored + 1, self.max_batches)
+    
+    def sample(self, n: int) -> torch.Tensor:
+        """
+        Sample n (problem, response) pairs from the buffer.
+        
+        Samples response indices uniformly, then looks up the corresponding problem
+        embedding based on the implicit mapping: response[i] belongs to problem[i // G].
+        
+        Args:
+            n: Number of pairs to sample
+        
+        Returns:
+            concatenated: Tensor of shape [n, 2 * embedding_dim] containing
+                         concatenated (problem_emb, response_emb) pairs
+        
+        Raises:
+            RuntimeError: If buffer is empty
+        """
+        if self.num_batches_stored == 0:
+            raise RuntimeError("Cannot sample from empty buffer")
+        
+        # Compute how many responses are currently in the buffer
+        total_responses = self.num_batches_stored * self.responses_per_batch
+        
+        # Sample response indices uniformly with replacement
+        response_indices = torch.randint(0, total_responses, (n,), device=self.device)
+        
+        # Get response embeddings
+        sampled_responses = self.response_embs[response_indices]
+        
+        # Compute corresponding problem indices
+        # Each batch of B*G responses maps to B problems
+        # response[i] in batch b belongs to problem (b * B) + (i % (B*G)) // G
+        batch_idx = response_indices // self.responses_per_batch
+        within_batch_response_idx = response_indices % self.responses_per_batch
+        within_batch_problem_idx = within_batch_response_idx // self.group_size
+        problem_indices = batch_idx * self.batch_size + within_batch_problem_idx
+        
+        # Get problem embeddings
+        sampled_problems = self.problem_embs[problem_indices]
+        
+        # Concatenate for RND input: [problem_emb, response_emb]
+        concatenated = torch.cat([sampled_problems, sampled_responses], dim=1)
+        
+        return concatenated
+    
+    def get_current_size(self) -> Dict[str, int]:
+        """Get current buffer statistics."""
+        return {
+            'num_batches': self.num_batches_stored,
+            'num_problems': self.num_batches_stored * self.batch_size,
+            'num_responses': self.num_batches_stored * self.responses_per_batch,
+            'capacity_batches': self.max_batches,
+            'capacity_responses': self.max_responses
+        }
+    
+    def is_empty(self) -> bool:
+        """Check if buffer is empty."""
+        return self.num_batches_stored == 0
+    
+    def is_full(self) -> bool:
+        """Check if buffer is at capacity."""
+        return self.num_batches_stored >= self.max_batches
+
 
 class SemanticRND(nn.Module):
     """
@@ -399,14 +610,26 @@ class SemanticRND(nn.Module):
                              Must have same final dimension as target_layers.
             device: Device to run on ('cpu' or 'cuda'). If None, auto-detects.
             max_length: Maximum token length for encoder
-            concat_problem_answer: If True, concatenate problem and answer before encoding.
-                                   If False, encode them separately and concatenate embeddings.
-            separator: Separator to use when concatenating problem and answer texts
+            concat_problem_answer: MUST be False for buffer-based training.
+                                   Problem and answer are encoded separately and concatenated.
+            separator: Separator to use when concatenating problem and answer texts (unused when concat=False)
             normalize_embeddings: If True, normalize embeddings with FIXED statistics.
                                  You MUST call initialize_embedding_normalizer() after creation
                                  with initial data before training. Default False (safest).
+        
+        Raises:
+            ValueError: If concat_problem_answer=True (not supported for buffer-based training)
         """
         super().__init__()
+        
+        # For buffer-based training, we MUST encode problem and answer separately
+        # so we can store them separately and sample efficiently
+        if concat_problem_answer:
+            raise ValueError(
+                "concat_problem_answer=True is not supported for buffer-based training. "
+                "Set concat_problem_answer=False to encode problem and answer separately, "
+                "allowing efficient storage and sampling from the RND buffer."
+            )
         
         # Auto-detect device if not specified
         if device is None:
@@ -453,7 +676,9 @@ class SemanticRND(nn.Module):
             device=self.device,
             normalize_embeddings=normalize_embeddings
         )
-    
+        
+        # Internal optimizer for buffer-based training
+        self._optimizer = torch.optim.Adam(self.rnd.predictor_parameters(), lr=1e-3)
         
         print(f"[SemanticRND] Initialization complete!")
     
@@ -656,6 +881,337 @@ class SemanticRND(nn.Module):
         
         return rewards, loss.item()
 
+    # =========================================================================
+    # BUFFER-BASED TRAINING METHODS
+    # =========================================================================
+    
+    def encode_batch_separately(
+        self,
+        problems: List[str],
+        responses: List[str]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode problems and responses separately for buffer-based training.
+        
+        This method is used to prepare embeddings for the RND buffer, where
+        problem and response embeddings are stored separately.
+        
+        Args:
+            problems: List of B problem strings (one per problem in batch)
+            responses: List of B*G response strings (G responses per problem)
+        
+        Returns:
+            problem_embs: Tensor of shape [B, embedding_dim]
+            response_embs: Tensor of shape [B*G, embedding_dim]
+        """
+        with torch.no_grad():
+            problem_embs = self.encoder.encode(
+                problems,
+                pooling="auto",
+                normalize=True,
+                return_numpy=False
+            )  # [B, embedding_dim]
+            
+            response_embs = self.encoder.encode(
+                responses,
+                pooling="auto",
+                normalize=True,
+                return_numpy=False
+            )  # [B*G, embedding_dim]
+        
+        return problem_embs, response_embs
+    
+    def compute_normalized_rewards_from_embeddings(
+        self,
+        problem_embs: torch.Tensor,
+        response_embs: torch.Tensor,
+        group_size: int,
+        update_stats: bool = True
+    ) -> torch.Tensor:
+        """
+        Compute RND rewards WITH running mean/std normalization from pre-computed embeddings.
+        
+        This method applies the standard RND running mean/std normalization. The returned
+        rewards have been normalized by the running statistics maintained by the RND module.
+        
+        Args:
+            problem_embs: Tensor of shape [B, embedding_dim] - one per problem
+            response_embs: Tensor of shape [B*G, embedding_dim] - G per problem
+            group_size: G = number of responses per problem
+            update_stats: Whether to update the running mean/std statistics
+        
+        Returns:
+            normalized_rewards: Tensor of shape [B*G] with running mean/std normalized rewards
+        """
+        B = problem_embs.shape[0]
+        G = group_size
+        
+        # Expand problem embeddings to match responses: each problem is repeated G times
+        expanded_problems = problem_embs.unsqueeze(1).expand(-1, G, -1).reshape(B * G, -1)
+        
+        # Concatenate: [problem_emb, response_emb]
+        concatenated = torch.cat([expanded_problems, response_embs], dim=1)  # [B*G, 2*D]
+        
+        # Use RNDModule's forward method which applies running mean/std normalization
+        # This returns (normalized_rewards, predictor_loss) - we only need rewards
+        normalized_rewards, _ = self.rnd(
+            concatenated,
+            update_stats=update_stats,
+            train_encoder=False
+        )
+        
+        return normalized_rewards.flatten()  # Ensure [B*G] shape
+    
+    def train_step_from_buffer(
+        self,
+        buffer: 'RNDBuffer',
+        minibatch_size: int,
+        optimizer: torch.optim.Optimizer
+    ) -> float:
+        """
+        Perform a single training step by sampling from the buffer.
+        
+        Args:
+            buffer: RNDBuffer instance to sample from
+            minibatch_size: Number of (problem, response) pairs to sample
+            optimizer: Optimizer for the RND predictor network
+        
+        Returns:
+            loss_value: The MSE loss value as a float
+        """
+        # Sample from buffer
+        sampled_embeddings = buffer.sample(minibatch_size)  # [N, 2*embedding_dim]
+        
+        # Compute loss
+        loss = self.rnd.train_step(sampled_embeddings)
+        
+        # Backward and step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        return loss.item()
+    
+    def encode_problems_responses_separately(
+        self,
+        problems: List[str],
+        responses: List[str]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode problems and responses into separate embeddings.
+        
+        Alias for encode_batch_separately for API consistency with curiosity_train.py.
+        
+        Args:
+            problems: List of B problem strings (one per problem in batch)
+            responses: List of B*G response strings (G responses per problem)
+        
+        Returns:
+            problem_embs: Tensor of shape [B, embedding_dim]
+            response_embs: Tensor of shape [B*G, embedding_dim]
+        """
+        return self.encode_batch_separately(problems, responses)
+    
+    def compute_rewards_stratified_normalized(
+        self,
+        problem_embeddings: torch.Tensor,
+        response_embeddings: torch.Tensor,
+        extrinsic_rewards: torch.Tensor,
+        group_size: int,
+        curiosity_coef: float, #TODO: different coefficients for correct and incorrect?
+        correctness_threshold: float = 0.5,
+        penalize_incorrect: bool = True,
+        update_rnd_stats: bool = True
+    ) -> torch.Tensor:
+        """
+        Compute stratified-normalized signed curiosity rewards.
+        
+        Full pipeline for buffer-based training:
+        1. Compute RND rewards WITH running mean/std normalization (standard RND behavior)
+        2. Determine correctness from extrinsic rewards
+        3. Apply stratified min-max normalization within each group's correct/incorrect subsets
+        4. Apply signed curiosity coefficient
+        
+        The two-stage normalization:
+        - Stage 1: RND running mean/std normalization (global, accumulated over time)
+        - Stage 2: Stratified group-wise min-max normalization (local, per-group, per-correctness)
+        
+        Args:
+            problem_embeddings: Tensor of shape [B, embedding_dim]
+            response_embeddings: Tensor of shape [B*G, embedding_dim]
+            extrinsic_rewards: Tensor of shape [B*G] - original task rewards
+            group_size: G = number of responses per problem
+            curiosity_coef: Coefficient for curiosity rewards
+            correctness_threshold: Threshold for determining correctness (>= threshold)
+            penalize_incorrect: Whether to apply negative reward for incorrect novel responses
+            update_rnd_stats: Whether to update RND's running mean/std statistics
+        
+        Returns:
+            signed_rewards: Tensor of shape [B*G] with signed curiosity rewards
+        """
+        # 1. Compute RND rewards WITH running mean/std normalization
+        # This uses the standard RND normalization (running mean/std)
+        rnd_normalized_rewards = self.compute_normalized_rewards_from_embeddings(
+            problem_embeddings, response_embeddings, group_size,
+            update_stats=update_rnd_stats
+        )
+        
+        # 2. Determine correctness
+        correctness = extrinsic_rewards >= correctness_threshold
+        
+        # 3. Stratified min-max normalization within groups
+        # This normalizes the already RND-normalized rewards within each group's 
+        # correct/incorrect subsets to [0, 1]
+        stratified_normalized_rewards = normalize_rewards_stratified_groupwise(
+            rnd_normalized_rewards, correctness, group_size
+        )
+        
+        # 4. Apply signed coefficient
+        if penalize_incorrect:
+            signed_rewards = apply_signed_curiosity_rewards(
+                stratified_normalized_rewards, correctness, curiosity_coef
+            )
+        else:
+            # Only reward correct, no penalty for incorrect
+            signed_rewards = torch.where(
+                correctness,
+                curiosity_coef * stratified_normalized_rewards,
+                torch.zeros_like(stratified_normalized_rewards)
+            )
+        
+        return signed_rewards
+    
+    def train_step_from_embeddings(
+        self,
+        concatenated_embeddings: torch.Tensor
+    ) -> float:
+        """
+        Perform a single training step from pre-concatenated embeddings.
+        
+        Uses the internal optimizer to update the predictor network.
+        
+        Args:
+            concatenated_embeddings: Tensor of shape [N, 2*embedding_dim] 
+                                    containing concatenated (problem, response) embeddings
+        
+        Returns:
+            loss_value: The MSE loss value as a float
+        """
+        # Zero gradients
+        self._optimizer.zero_grad()
+        
+        # Compute loss
+        loss = self.rnd.train_step(concatenated_embeddings)
+        
+        # Backward and step
+        loss.backward()
+        self._optimizer.step()
+        
+        return loss.item()
+
+
+def normalize_rewards_stratified_groupwise(
+    rewards: torch.Tensor,
+    correctness: torch.Tensor,
+    group_size: int,
+    eps: float = 1e-8
+) -> torch.Tensor:
+    """
+    Apply stratified min-max normalization within each group.
+    
+    This is the SECOND stage of normalization, applied AFTER the RND's running
+    mean/std normalization. It normalizes rewards within each group's correct
+    and incorrect subsets separately to [0, 1].
+    
+    For each group of G rollouts:
+    - Normalize correct rewards among themselves to [0, 1]
+    - Normalize incorrect rewards among themselves to [0, 1]
+    
+    This ensures that novelty is compared within the same correctness stratum,
+    preventing incorrect answers from dominating the reward scale.
+    
+    Args:
+        rewards: Tensor of shape [B*G] with RND-normalized intrinsic rewards
+                (already normalized by running mean/std)
+        correctness: Tensor of shape [B*G] (bool) - True if response is correct (reward >= threshold)
+        group_size: G = number of responses per problem
+        eps: Small epsilon for numerical stability
+    
+    Returns:
+        stratified_normalized: Tensor of shape [B*G] with values in [0, 1] within each stratum
+    """
+    device = rewards.device
+    B = rewards.shape[0] // group_size
+    G = group_size
+    
+    # Reshape to [B, G] for group-wise operations
+    rewards_bg = rewards.view(B, G)
+    correct_bg = correctness.view(B, G)
+    
+    # Output tensor
+    normalized_bg = torch.zeros_like(rewards_bg)
+    
+    for b in range(B):
+        group_rewards = rewards_bg[b]  # [G]
+        group_correct = correct_bg[b]  # [G] bool
+        
+        # Normalize correct subset
+        correct_mask = group_correct
+        num_correct = correct_mask.sum().item()
+        if num_correct > 0:
+            correct_rewards = group_rewards[correct_mask]
+            if num_correct > 1:
+                r_min = correct_rewards.min()
+                r_max = correct_rewards.max()
+                normalized = (correct_rewards - r_min) / (r_max - r_min + eps)
+            else:
+                # Single element: assign 0.5 (middle of [0, 1])
+                normalized = torch.tensor([0.5], device=device) #TODO: maybe do 1?
+            normalized_bg[b, correct_mask] = normalized
+        
+        # Normalize incorrect subset
+        incorrect_mask = ~group_correct
+        num_incorrect = incorrect_mask.sum().item()
+        if num_incorrect > 0:
+            incorrect_rewards = group_rewards[incorrect_mask]
+            if num_incorrect > 1:
+                r_min = incorrect_rewards.min()
+                r_max = incorrect_rewards.max()
+                normalized = (incorrect_rewards - r_min) / (r_max - r_min + eps)
+            else:
+                # Single element: assign 0.5
+                normalized = torch.tensor([0.5], device=device)
+            normalized_bg[b, incorrect_mask] = normalized
+    
+    return normalized_bg.view(-1)  # Flatten back to [B*G]
+
+
+def apply_signed_curiosity_rewards(
+    normalized_rewards: torch.Tensor,
+    correctness: torch.Tensor,
+    curiosity_coef: float
+) -> torch.Tensor:
+    """
+    Apply signed curiosity rewards based on correctness.
+    
+    - Correct answers: receive +curiosity_coef * normalized_reward (reward novelty)
+    - Incorrect answers: receive -curiosity_coef * normalized_reward (penalize creative failures)
+    
+    Args:
+        normalized_rewards: Tensor of shape [B*G] with values in [0, 1]
+        correctness: Tensor of shape [B*G] (bool) - True if response is correct
+        curiosity_coef: Coefficient for curiosity rewards
+    
+    Returns:
+        signed_rewards: Tensor of shape [B*G] with signed curiosity rewards
+    """
+    signed_rewards = torch.where(
+        correctness,
+        curiosity_coef * normalized_rewards,    # Positive for correct
+        -curiosity_coef * normalized_rewards    # Negative for incorrect
+    )
+    return signed_rewards
+
 
 if __name__ == "__main__":
     """
@@ -722,49 +1278,86 @@ if __name__ == "__main__":
         print(f"   Step {step+1}/3: Loss = {loss.item():.6f}")
     
     print("\n" + "="*70)
-    print("EXAMPLE: SemanticRND WITH fixed embedding normalization (advanced)")
+    print("EXAMPLE: Buffer-based RND training with stratified rewards")
     print("="*70)
     
-    # 5. Create a new instance with embedding normalization enabled
-    print("\n5. Initializing SemanticRND with embedding normalization...")
+    # 5. Demonstrate buffer-based training
+    print("\n5. Creating RND buffer...")
     
-    semantic_rnd_normalized = SemanticRND(
-        encoder_model_name="Alibaba-NLP/gte-modernbert-base",
-        target_layers=(128, 64),  # Simple 2-layer target network
-        predictor_layers=(256, 128, 64),  # More complex 3-layer predictor
-        device=device,
-        max_length=512,
-        concat_problem_answer=True,
-        normalize_embeddings=True  # ENABLE embedding normalization
+    # Simulate a small batch: B=4 problems, G=3 responses each
+    B, G = 4, 3
+    embedding_dim = semantic_rnd.embedding_dim
+    
+    buffer = RNDBuffer(
+        max_batches=5,  # S = 5
+        batch_size=B,
+        group_size=G,
+        embedding_dim=embedding_dim,
+        device=device
     )
     
-    # 6. Initialize embedding normalizer with initial data (REQUIRED)
-    print("\n6. Initializing embedding normalizer with initial data...")
-    initial_data = [
-        [
-            ("What is 2+2?", "4"),
-            ("What is 3×3?", "9"),
-            ("What is 10-5?", "5"),
-            ("What is 12÷3?", "4"),
-        ]
+    print(f"   Buffer created: {buffer.get_current_size()}")
+    
+    # 6. Encode a batch and add to buffer
+    print("\n6. Encoding batch and adding to buffer...")
+    
+    problems = ["What is 2+2?", "What is 3×3?", "What is 5-1?", "What is 6÷2?"]
+    responses = [
+        # Problem 0: 3 responses
+        "4", "The answer is 4", "2+2=4",
+        # Problem 1: 3 responses  
+        "9", "It's nine", "Wrong answer",
+        # Problem 2: 3 responses
+        "4", "5-1=4", "The answer is 5",
+        # Problem 3: 3 responses
+        "3", "6/2=3", "Two"
     ]
+    # Correctness: first 2 of each group correct, last one incorrect
+    correctness = torch.tensor([
+        True, True, True,    # Problem 0: all correct
+        True, True, False,   # Problem 1: 2 correct, 1 wrong
+        True, True, False,   # Problem 2: 2 correct, 1 wrong
+        True, True, False    # Problem 3: 2 correct, 1 wrong
+    ], device=device)
     
-    # This computes mean/std from initial data and FREEZES them
-    semantic_rnd_normalized.initialize_embedding_normalizer(initial_data)
+    problem_embs, response_embs = semantic_rnd.encode_batch_separately(problems, responses)
+    print(f"   Problem embeddings: {problem_embs.shape}")
+    print(f"   Response embeddings: {response_embs.shape}")
     
-    # 7. Now we can use it for training
-    print("\n7. Using SemanticRND with frozen embedding normalization...")
-    rewards, loss = semantic_rnd_normalized(problem_answer_pairs, update_stats=True)
-    print(f"   ✓ Rewards with normalized embeddings: {rewards.shape}")
-    print(f"   ✓ Loss: {loss.item():.6f}")
+    # Compute rewards using proper two-stage normalization:
+    # Stage 1: RND running mean/std normalization (global)
+    # Stage 2: Stratified group-wise min-max normalization (local)
+    # Then apply signed coefficient based on correctness
+    extrinsic_rewards = correctness.float()  # Simulate extrinsic rewards (1.0 for correct, 0.0 for incorrect)
+    signed_rewards = semantic_rnd.compute_rewards_stratified_normalized(
+        problem_embeddings=problem_embs,
+        response_embeddings=response_embs,
+        extrinsic_rewards=extrinsic_rewards,
+        group_size=G,
+        curiosity_coef=0.1,
+        correctness_threshold=0.5,
+        penalize_incorrect=True,
+        update_rnd_stats=True
+    )
+    print(f"   Signed rewards: min={signed_rewards.min():.4f}, max={signed_rewards.max():.4f}")
+    
+    # Add to buffer
+    buffer.add_batch(problem_embs, response_embs, correctness)
+    print(f"   Buffer after add: {buffer.get_current_size()}")
+    
+    # 7. Train from buffer
+    print("\n7. Training RND from buffer for 3 steps...")
+    for step in range(3):
+        loss = semantic_rnd.train_step_from_buffer(buffer, minibatch_size=B*G, optimizer=optimizer)
+        print(f"   Step {step+1}/3: Loss = {loss:.6f}")
     
     print("\n" + "="*70)
-    print("KEY TAKEAWAY:")
-    print("  • Default (normalize_embeddings=False): Safest, works well")
-    print("  • Advanced (normalize_embeddings=True): Requires initialization,")
-    print("    but can help when embeddings have very different scales")
-    print("  • CRITICAL: Embedding stats are FROZEN to avoid the problem where")
-    print("    updating stats would make 'same' inputs normalize differently!")
+    print("KEY POINTS:")
+    print("  • Use concat_problem_answer=False for buffer-based training")
+    print("  • Store problem and response embeddings separately in RNDBuffer")
+    print("  • Compute rewards BEFORE adding to buffer (for accurate novelty)")
+    print("  • Use stratified normalization within correct/incorrect groups")
+    print("  • Apply +coef for correct answers, -coef for incorrect")
     print("="*70)
     
     print("\nExample completed successfully!")

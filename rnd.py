@@ -15,6 +15,8 @@ used as building blocks in RL/GRPO training loops.
 
 import torch
 import torch.nn as nn
+import pickle
+from pathlib import Path
 from typing import Tuple, List, Iterator, Optional, Dict
 from encoder import Encoder
 
@@ -185,14 +187,14 @@ class RNDModule(nn.Module):
         # This is crucial - we NEVER update these stats during training to avoid the problem
         # where updating stats would make the same embedding normalize to different values
         if normalize_embeddings:
-            self.embedding_normalizer = RunningMeanStd(shape=(input_dim,))
+            self.embedding_normalizer = RunningMeanStd(shape=(input_dim,)).to(device)
             self.embedding_stats_frozen = False  # Will be set to True after initialization
         else:
             self.embedding_normalizer = None
             self.embedding_stats_frozen = True
         
         # Reward normalizer: Updated during training (this is standard RND)
-        self.reward_normalizer = RunningMeanStd(shape=()) 
+        self.reward_normalizer = RunningMeanStd(shape=()).to(device)
         
         self.target_network = self._build_network(input_dim, target_layers).to(device)
         self.predictor_network = self._build_network(input_dim, predictor_layers).to(device)
@@ -264,23 +266,15 @@ class RNDModule(nn.Module):
             raise RuntimeError("Cannot initialize embedding normalizer when normalize_embeddings=False")
         
         if self.embedding_stats_frozen:
-            print("[WARNING] Embedding normalizer already frozen. Skipping re-initialization.")
             return
-        
-        print(f"[RND] Initializing embedding normalizer with {initial_embeddings.shape[0]} samples...")
         
         # Update stats with initial data
         self.embedding_normalizer.update(initial_embeddings)
         
         # FREEZE the stats - they will never be updated again
         self.embedding_stats_frozen = True
-        
-        # print(f"[RND] ✓ Embedding normalizer frozen:")
-        # print(f"      Mean: {self.embedding_normalizer.mean[:5]}... (first 5 dims)")
-        # print(f"      Std:  {self.embedding_normalizer.std[:5]}... (first 5 dims)")
-        # print(f"[RND] ⚠️  These stats will NEVER be updated during training!")
 
-    def forward(self, embeddings_batch: torch.Tensor, 
+    def forward(self, embeddings_batch: torch.Tensor,
                 update_stats: bool = True,
                 train_encoder: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -595,9 +589,10 @@ class SemanticRND(nn.Module):
         predictor_layers: Tuple[int, ...] = (512, 512, 512),
         device: str = None,
         max_length: int = 8192,
-        concat_problem_answer: bool = True,
+        concat_before_emb: bool = False,
         separator: str = " [SEP] ",
-        normalize_embeddings: bool = False
+        normalize_embeddings: bool = False,
+        embedding_load_file: str = None
     ):
         """
         Initialize the Semantic RND module.
@@ -610,25 +605,34 @@ class SemanticRND(nn.Module):
                              Must have same final dimension as target_layers.
             device: Device to run on ('cpu' or 'cuda'). If None, auto-detects.
             max_length: Maximum token length for encoder
-            concat_problem_answer: MUST be False for buffer-based training.
+            concat_before_emb: MUST be False for buffer-based training.
                                    Problem and answer are encoded separately and concatenated.
             separator: Separator to use when concatenating problem and answer texts (unused when concat=False)
             normalize_embeddings: If True, normalize embeddings with FIXED statistics.
-                                 You MUST call initialize_embedding_normalizer() after creation
-                                 with initial data before training. Default False (safest).
+                                 Requires embedding_load_file to be provided.
+            embedding_load_file: Path to precomputed embeddings file (.pkl). Required when
+                                normalize_embeddings=True. Used to initialize fixed normalization stats.
         
         Raises:
-            ValueError: If concat_problem_answer=True (not supported for buffer-based training)
+            ValueError: If concat_before_emb=True (not supported for buffer-based training)
+            ValueError: If normalize_embeddings=True but embedding_load_file is not provided
         """
         super().__init__()
         
         # For buffer-based training, we MUST encode problem and answer separately
         # so we can store them separately and sample efficiently
-        if concat_problem_answer:
+        if concat_before_emb:
             raise ValueError(
-                "concat_problem_answer=True is not supported for buffer-based training. "
-                "Set concat_problem_answer=False to encode problem and answer separately, "
+                "concat_before_emb=True is not supported for buffer-based training. "
+                "Set concat_before_emb=False to encode problem and answer separately, "
                 "allowing efficient storage and sampling from the RND buffer."
+            )
+        
+        # Validate embedding_load_file requirement
+        if normalize_embeddings and embedding_load_file is None:
+            raise ValueError(
+                "embedding_load_file must be provided when normalize_embeddings=True. "
+                "Provide the path to a precomputed embeddings .pkl file."
             )
         
         # Auto-detect device if not specified
@@ -636,7 +640,7 @@ class SemanticRND(nn.Module):
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
         
-        self.concat_problem_answer = concat_problem_answer
+        self.concat_before_emb = concat_before_emb
         self.separator = separator
         self.normalize_embeddings = normalize_embeddings
         
@@ -652,23 +656,17 @@ class SemanticRND(nn.Module):
         for param in self.encoder.model.parameters():
             param.requires_grad = False
         self.encoder.model.eval()  # Set to eval mode permanently
-        print(f"[SemanticRND] Encoder frozen (requires_grad=False)")
         
         # Get embedding dimension from encoder
         self.embedding_dim = self.encoder.embedding_dim
         
         # If encoding problem and answer separately, embedding dim doubles
-        if not concat_problem_answer:
+        if not concat_before_emb:
             rnd_input_dim = self.embedding_dim * 2
-            print(f"[SemanticRND] Encoding problem and answer separately (input_dim={rnd_input_dim})")
         else:
             rnd_input_dim = self.embedding_dim
-            print(f"[SemanticRND] Encoding concatenated problem+answer (input_dim={rnd_input_dim})")
         
         # 2. Initialize the RND module
-        print(f"[SemanticRND] Initializing RND module (normalize_embeddings={normalize_embeddings})")
-        print(f"[SemanticRND] Target network layers: {target_layers}")
-        print(f"[SemanticRND] Predictor network layers: {predictor_layers}")
         self.rnd = RNDModule(
             input_dim=rnd_input_dim,
             target_layers=target_layers,
@@ -680,7 +678,56 @@ class SemanticRND(nn.Module):
         # Internal optimizer for buffer-based training
         self._optimizer = torch.optim.Adam(self.rnd.predictor_parameters(), lr=1e-3)
         
+        # 3. If normalize_embeddings=True, load precomputed embeddings and initialize normalizer
+        if normalize_embeddings:
+            initial_embeddings = self._load_and_prepare_embeddings_for_normalizer(
+                embedding_load_file
+            )
+            self.initialize_embedding_normalizer(initial_embeddings)
+        
         print(f"[SemanticRND] Initialization complete!")
+    
+    def _load_and_prepare_embeddings_for_normalizer(
+        self, 
+        filepath: str
+    ) -> torch.Tensor:
+        """
+        Load precomputed embeddings and prepare them for initializing the embedding normalizer.
+        
+        Args:
+            filepath: Path to the precomputed embeddings .pkl file
+        
+        Returns:
+            torch.Tensor: Concatenated embeddings suitable for initializing the normalizer
+        """
+        # Load embeddings from disk
+        filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"Embeddings file not found: {filepath}")
+        
+        print(f"[SemanticRND] Loading embeddings from {filepath}...")
+        with open(filepath, 'rb') as f:
+            embeddings_data = pickle.load(f)
+        
+        # Extract embeddings
+        problem_embs = embeddings_data['problem_embs']
+        solution1_embs = embeddings_data['solution1_embs']
+        solution2_embs = embeddings_data['solution2_embs']
+        solution3_embs = embeddings_data['solution3_embs']
+        
+        if not self.concat_before_emb:
+            # Do not concatenate problem and solution strings but after encoding
+            train_sol1_embs = torch.cat([problem_embs, solution1_embs], dim=1)
+            train_sol2_embs = torch.cat([problem_embs, solution2_embs], dim=1)
+            train_sol3_embs = torch.cat([problem_embs, solution3_embs], dim=1)
+        else:
+            raise NotImplementedError("concat_before_emb=True is not supported for normalization.")
+
+        # Combine all training embeddings for normalization stats
+        all_embeddings = torch.cat([train_sol1_embs, train_sol2_embs, train_sol3_embs], dim=0)
+
+        print(f"[SemanticRND] Loaded {all_embeddings.shape[0]} embeddings for normalizer initialization")
+        return all_embeddings
     
     def predictor_parameters(self) -> Iterator[nn.Parameter]:
         """
@@ -689,47 +736,28 @@ class SemanticRND(nn.Module):
         """
         return self.rnd.predictor_parameters()
     
+    
     def initialize_embedding_normalizer(
         self,
-        problem_answer_pairs: List[List[Tuple[str, str]]]
+        embeddings: torch.Tensor
     ):
         """
         Initialize embedding normalization with FIXED statistics from initial data.
         
-        This should be called ONCE before training begins if normalize_embeddings=True.
+        This is called ONCE before training begins if normalize_embeddings=True.
         The statistics computed from this data will be frozen and never updated.
         
         Args:
-            problem_answer_pairs: Initial dataset to compute normalization statistics.
+            embeddings: Initial dataset to compute normalization statistics.
                                  Should be large enough to be representative (e.g., 1000+ samples).
         
-        Example:
-            >>> # Create SemanticRND with embedding normalization
-            >>> semantic_rnd = SemanticRND(..., normalize_embeddings=True)
-            >>> 
-            >>> # Prepare initial data
-            >>> initial_data = [[(q1, a1), (q2, a2), ...], ...]
-            >>> 
-            >>> # Initialize and freeze normalization stats
-            >>> semantic_rnd.initialize_embedding_normalizer(initial_data)
-            >>> 
-            >>> # Now ready for training - stats will never change
         """
         if not self.normalize_embeddings:
-            print("[WARNING] Embedding normalization disabled. Skipping initialization.")
+            print("[SemanticRND] Embedding normalization is disabled; skipping initialization.")
             return
-        
-        # print(f"[SemanticRND] Encoding initial data for embedding normalization...")
-        
-        # Encode initial data to get embeddings
-        embeddings, _, total_samples = self.encode(problem_answer_pairs)
-        
-        # print(f"[SemanticRND] Initializing embedding normalizer with {total_samples} samples...")
         
         # Initialize RND's embedding normalizer with these embeddings
         self.rnd.initialize_embedding_normalizer(embeddings)
-        
-        # print(f"[SemanticRND] ✓ Ready for training with FIXED embedding normalization!")
     
     def encode(
         self,
@@ -757,7 +785,7 @@ class SemanticRND(nn.Module):
         for batch in problem_answer_pairs:
             batch_sizes.append(len(batch))
             for problem, answer in batch:
-                if self.concat_problem_answer:
+                if self.concat_before_emb:
                     # Concatenate problem and answer with separator
                     text = problem + self.separator + answer
                     all_texts.append(text)
@@ -769,7 +797,7 @@ class SemanticRND(nn.Module):
         
         # Encode all texts with no_grad since encoder is frozen
         with torch.no_grad():
-            if self.concat_problem_answer:
+            if self.concat_before_emb:
                 # Single batch encoding of all concatenated texts
                 embeddings = self.encoder.encode(
                     all_texts,
@@ -1238,9 +1266,10 @@ if __name__ == "__main__":
         predictor_layers=(512, 256, 64),  # Predictor: different architecture, same output
         device=device,
         max_length=512,
-        concat_problem_answer=False,
+        concat_before_emb=False,
         separator=" [SEP] ",
-        normalize_embeddings=False  # Default: no embedding normalization (safest)
+        normalize_embeddings=True,  # Default: no embedding normalization (safest)
+        embedding_load_file="RND_experimentation/embeddings/embeddings_gte_12000.pkl"
     )
     
     # 2. Prepare sample data
@@ -1353,7 +1382,7 @@ if __name__ == "__main__":
     
     print("\n" + "="*70)
     print("KEY POINTS:")
-    print("  • Use concat_problem_answer=False for buffer-based training")
+    print("  • Use concat_before_emb=False for buffer-based training")
     print("  • Store problem and response embeddings separately in RNDBuffer")
     print("  • Compute rewards BEFORE adding to buffer (for accurate novelty)")
     print("  • Use stratified normalization within correct/incorrect groups")

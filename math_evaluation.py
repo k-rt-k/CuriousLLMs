@@ -154,10 +154,10 @@ def load_aime_dataset() -> list[dict]:
     dataset = load_dataset("HuggingFaceH4/aime_2024", split="train")
     return [
         {
-            "id": item["id"],
-            "problem": item["problem"],
-            "answer": item["answer"],
-            "solution": item["solution"],
+            "id": item["id"], # type: ignore
+            "problem": item["problem"], # type: ignore
+            "answer": item["answer"], # type: ignore
+            "solution": item["solution"], # type: ignore
         }
         for item in dataset
     ]
@@ -168,10 +168,10 @@ def load_aime2025_dataset() -> list[dict]:
     dataset = load_dataset("yentinglin/aime_2025", split="train")
     return [
         {
-            "id": item["id"],
-            "problem": item["problem"],
-            "answer": item["answer"],
-            "solution": item["solution"],  # Same as answer for AIME 2025
+            "id": item["id"], # type: ignore
+            "problem": item["problem"], # type: ignore
+            "answer": item["answer"], # type: ignore
+            "solution": item["solution"], # type: ignore # Same as answer for AIME 2025
         }
         for item in dataset
     ]

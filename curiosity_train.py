@@ -1261,6 +1261,7 @@ async def prepare_minibatch(
             metrics["rnd/num_incorrect"] = int((~correct_mask).sum())
             buffer_stats = rnd_buffer.get_current_size()
             metrics["rnd/buffer_num_responses"] = buffer_stats['num_responses']
+            metrics["rnd/buffer_memory_mb"] = buffer_stats['memory_mb']
             
         # Train RND from buffer (K update steps)
         # Use the rnd_minibatch_size parameter (passed from config)
@@ -1285,7 +1286,7 @@ async def prepare_minibatch(
                 logger.info(
                     f"RND buffer training: {rnd_update_steps} updates, "
                     f"loss={np.mean(rnd_losses):.4f}±{np.std(rnd_losses):.4f}, "
-                    f"buffer_size={total_responses}"
+                    f"buffer_size={total_responses}, memory={buffer_stats['memory_mb']:.1f}MB"
                 )
             else:
                 metrics["rnd/loss_mean"] = 0.0

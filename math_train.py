@@ -70,7 +70,7 @@ class CLIConfig:
     # BEGIN SEMANTIC_RND CODE
     # RND Buffer-based training configuration
     use_rnd_curiosity: bool = True  # Whether to use RND-based curiosity rewards
-    rnd_buffer_size_multiplier: int = 5  # S = buffer holds S batches of rollouts
+    rnd_buffer_size_multiplier: int = 3  # S = buffer holds S batches of rollouts
     rnd_update_steps: int = 50  # K = number of RND gradient updates per LLM batch
     rnd_minibatch_size: int = min(1024, group_size * groups_per_batch)  # N = samples per RND update (default = B*G)
     curiosity_reward_coef: float = 0.2  # Coefficient for curiosity rewards

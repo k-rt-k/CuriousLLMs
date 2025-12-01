@@ -22,8 +22,12 @@ from pathlib import Path
 from typing import Tuple, List, Iterator, Optional, Dict
 from encoder import Encoder
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s  [%(levelname)s]  %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
-
 
 class RunningMeanStd(nn.Module):
     """
@@ -552,13 +556,21 @@ class RNDBuffer:
         return concatenated
     
     def get_current_size(self) -> Dict[str, int]:
-        """Get current buffer statistics."""
+        """Get current buffer statistics including memory usage."""
+        # Calculate memory usage in bytes
+        problem_embs_bytes = self.problem_embs.element_size() * self.problem_embs.nelement()
+        response_embs_bytes = self.response_embs.element_size() * self.response_embs.nelement()
+        correctness_bytes = self.correctness.element_size() * self.correctness.nelement()
+        total_memory_bytes = problem_embs_bytes + response_embs_bytes + correctness_bytes
+        
         return {
             'num_batches': self.num_batches_stored,
             'num_problems': self.num_batches_stored * self.batch_size,
             'num_responses': self.num_batches_stored * self.responses_per_batch,
             'capacity_batches': self.max_batches,
-            'capacity_responses': self.max_responses
+            'capacity_responses': self.max_responses,
+            'memory_bytes': total_memory_bytes,
+            'memory_mb': total_memory_bytes / (1024 * 1024),
         }
     
     def is_empty(self) -> bool:
@@ -927,7 +939,7 @@ class SemanticRND(nn.Module):
         self,
         problems: List[str],
         responses: List[str],
-        response_batch_size: int = 256
+        response_batch_size: int = 205
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encode problems and responses separately for buffer-based training.

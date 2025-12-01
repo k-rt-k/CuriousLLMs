@@ -9,6 +9,13 @@ import os
 import time
 from typing import Any, Callable, List, Literal, Sequence, Iterator, Tuple
 
+# Configure logging format with timestamps
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s  [%(levelname)s]  %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 import chz
 import numpy as np
 import tinker
@@ -449,6 +456,7 @@ class Config:
     group_size: int = 16  # G = number of rollouts per problem
     penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
     correctness_threshold: float = 0.5  # Threshold for determining correctness (reward >= threshold)
+    curiosity_warmup_batches: int = 0  # Number of batches before curiosity rewards are added (RND still trains during warmup)
     # END SEMANTIC_RND CODE
 
 
@@ -982,6 +990,8 @@ async def prepare_minibatch(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    rnd_minibatch_size: int = 1024,
+    curiosity_warmup_batches: int = 0,
 ) -> tuple[list[tinker.Datum], dict[str, Any]]:
     """
     Converts the trajectories into a minibatch, and provides metrics about the minibatch.
@@ -1029,7 +1039,9 @@ async def prepare_minibatch(
     # BEGIN SEMANTIC_RND CODE
     # Compute reasoning-level rewards using GeminiJudge if provided
     # Only judge trajectories with correct answers (reward >= 0.9) to save API costs
-    if gemini_judge is not None:
+    # Skip reasoning rewards during warmup period (same as curiosity rewards)
+    apply_reasoning_rewards = i_batch >= curiosity_warmup_batches
+    if gemini_judge is not None and apply_reasoning_rewards:
         with timed("compute_reasoning_rewards", metrics):
             
             # Step 1: Identify correct trajectories and extract their data inline
@@ -1041,10 +1053,13 @@ async def prepare_minibatch(
             total_trajectories = 0
             
             for tg_idx, (env_group_builder, traj_group) in enumerate(safezip(env_group_builders_P, trajectory_groups_P)):
-                total_trajectories += len(traj_group.final_rewards_G)
+                # Use get_total_rewards() to get actual rewards (per-step + final group rewards)
+                # final_rewards_G is just the group reward (often 0.0), not the per-step rewards
+                total_rewards = traj_group.get_total_rewards()
+                total_trajectories += len(total_rewards)
                 
                 # Check if any trajectories in this group are correct
-                has_correct = any(reward >= 0.9 for reward in traj_group.final_rewards_G)
+                has_correct = any(reward >= 0.9 for reward in total_rewards)
                 if not has_correct:
                     continue
                 
@@ -1052,7 +1067,7 @@ async def prepare_minibatch(
                 envs = await env_group_builder.make_envs()
                 
                 for t_idx, (env, trajectory, reward) in enumerate(safezip(
-                    envs, traj_group.trajectories_G, traj_group.final_rewards_G
+                    envs, traj_group.trajectories_G, total_rewards
                 )):
                     if reward >= 0.9 and isinstance(env, ProblemEnv):
                         correct_indices.append((tg_idx, t_idx))
@@ -1094,15 +1109,24 @@ async def prepare_minibatch(
                 ]
                 
                 # Step 3: Update rewards only for judged (correct) trajectories
+                # We need to get the original total reward (per-step + group rewards)
+                # and modify the final_rewards_G to incorporate the judge reward
                 for i, (tg_idx, t_idx) in enumerate(correct_indices):
-                    original_reward = trajectory_groups_P[tg_idx].final_rewards_G[t_idx]
+                    # Get the total reward for this trajectory (per-step + group)
+                    traj = trajectory_groups_P[tg_idx].trajectories_G[t_idx]
+                    per_step_reward = sum(t.reward for t in traj.transitions)
+                    group_reward = trajectory_groups_P[tg_idx].final_rewards_G[t_idx]
+                    original_total_reward = per_step_reward + group_reward
+                    
                     judge_reward = reasoning_rewards[i]
                     # Combine: reasoning_coef * judge_reward + (1 - reasoning_coef) * correctness_reward
                     combined_reward = (
                         reasoning_reward_coef * judge_reward +
-                        (1 - reasoning_reward_coef) * original_reward
+                        (1 - reasoning_reward_coef) * original_total_reward
                     )
-                    trajectory_groups_P[tg_idx].final_rewards_G[t_idx] = combined_reward
+                    # Update final_rewards_G so that new_total = per_step + new_final_reward = combined_reward
+                    # new_final_reward = combined_reward - per_step_reward
+                    trajectory_groups_P[tg_idx].final_rewards_G[t_idx] = combined_reward - per_step_reward
                 
                 # Step 4: Compute reasoning metrics (only for judged trajectories)
                 num_correct_reasoning = sum(1 for r in reasoning_rewards if r == 1.0)
@@ -1133,6 +1157,10 @@ async def prepare_minibatch(
                 metrics["reasoning/correct_frac"] = 0.0
                 metrics["reasoning/incorrect_frac"] = 0.0
                 metrics["reasoning/uncertain_frac"] = 0.0
+    elif gemini_judge is not None and not apply_reasoning_rewards:
+        # Warmup period - skip reasoning rewards but log the skip
+        logger.info(f"Warmup batch {i_batch}/{curiosity_warmup_batches}: skipping reasoning rewards")
+        metrics["reasoning/warmup_active"] = 1
     # END SEMANTIC_RND CODE
 
     # BEGIN SEMANTIC_RND CODE
@@ -1145,11 +1173,11 @@ async def prepare_minibatch(
     # 6. Train RND for K steps sampling from buffer
     if novelty_model is not None and rnd_buffer is not None:
         with timed("compute_rnd_rewards", metrics):
-            # Validate concat_problem_answer mode
-            if novelty_model.concat_problem_answer:
+            # Validate concat_before_emb mode
+            if novelty_model.concat_before_emb:
                 raise ValueError(
-                    "Buffer-based RND training requires concat_problem_answer=False. "
-                    "Please initialize SemanticRND with concat_problem_answer=False."
+                    "Buffer-based RND training requires concat_before_emb=False. "
+                    "Please initialize SemanticRND with concat_before_emb=False."
                 )
             
             # Extract problems and responses separately
@@ -1161,9 +1189,11 @@ async def prepare_minibatch(
             G = len(responses_BG) // B  # Number of rollouts per problem
             
             # Get current extrinsic rewards for determining correctness
+            # Use get_total_rewards() to get actual rewards (per-step + final group rewards)
+            # final_rewards_G is just the group reward (often 0.0), not the per-step rewards
             extrinsic_rewards_BG = []
             for traj_group in trajectory_groups_P:
-                extrinsic_rewards_BG.extend(traj_group.final_rewards_G)
+                extrinsic_rewards_BG.extend(traj_group.get_total_rewards())
             extrinsic_rewards_BG = torch.tensor(extrinsic_rewards_BG, device=novelty_model.device)
             
             # Encode problems and responses separately
@@ -1189,15 +1219,24 @@ async def prepare_minibatch(
             # Add embeddings to buffer (for later RND training)
             rnd_buffer.add_batch(problem_embeddings_B, response_embeddings_BG, is_correct_BG)
             
-            # Add signed intrinsic rewards to the trajectories
-            intrinsic_rewards_list = signed_intrinsic_rewards.detach().cpu().tolist()
-            idx = 0
-            for traj_group in trajectory_groups_P:
-                for i in range(len(traj_group.final_rewards_G)):
-                    if idx < len(intrinsic_rewards_list):
-                        # intrinsic_rewards_list already has sign and coefficient applied
-                        traj_group.final_rewards_G[i] += intrinsic_rewards_list[idx]
-                        idx += 1
+            # Add signed intrinsic rewards to the trajectories (only after warmup period)
+            # During warmup, RND still trains but rewards are not added to RL training
+            apply_curiosity_rewards = i_batch >= curiosity_warmup_batches
+            
+            if apply_curiosity_rewards:
+                intrinsic_rewards_list = signed_intrinsic_rewards.detach().cpu().tolist()
+                idx = 0
+                for traj_group in trajectory_groups_P:
+                    for i in range(len(traj_group.final_rewards_G)):
+                        if idx < len(intrinsic_rewards_list):
+                            # intrinsic_rewards_list already has sign and coefficient applied
+                            traj_group.final_rewards_G[i] += intrinsic_rewards_list[idx]
+                            idx += 1
+            else:
+                logger.info(f"Warmup batch {i_batch}/{curiosity_warmup_batches}: RND training only, no curiosity rewards added")
+            
+            metrics["rnd/warmup_active"] = int(not apply_curiosity_rewards)
+            metrics["rnd/rewards_applied"] = int(apply_curiosity_rewards)
             
             # Log reward metrics (split by correct/incorrect)
             correct_mask = is_correct_BG.cpu().numpy()
@@ -1224,17 +1263,18 @@ async def prepare_minibatch(
             metrics["rnd/buffer_num_responses"] = buffer_stats['num_responses']
             
         # Train RND from buffer (K update steps)
-        rnd_minibatch_size = B * G  # Default: sample same size as one batch
+        # Use the rnd_minibatch_size parameter (passed from config)
+        effective_minibatch_size = min(rnd_minibatch_size, B * G)
         with timed("train_rnd_from_buffer", metrics):
             rnd_losses = []
             buffer_stats = rnd_buffer.get_current_size()
             total_responses = buffer_stats['num_responses']
             
-            if total_responses >= rnd_minibatch_size:
+            if total_responses >= effective_minibatch_size:
                 for k in range(rnd_update_steps):
                     # Sample from buffer and train in one step
                     loss = novelty_model.train_step_from_buffer(
-                        rnd_buffer, rnd_minibatch_size, novelty_model._optimizer
+                        rnd_buffer, effective_minibatch_size, novelty_model._optimizer
                     )
                     rnd_losses.append(loss)
                 
@@ -1252,7 +1292,7 @@ async def prepare_minibatch(
                 metrics["rnd/loss_std"] = 0.0
                 metrics["rnd/num_updates"] = 0
                 logger.info(
-                    f"RND buffer too small for training: {total_responses}/{rnd_minibatch_size} samples"
+                    f"RND buffer too small for training: {total_responses}/{effective_minibatch_size} samples"
                 )
     # END SEMANTIC_RND CODE
 
@@ -1403,6 +1443,8 @@ async def do_train_step_streaming_and_get_sampling_client(
                 rnd_update_steps=rnd_update_steps,
                 penalize_incorrect_novelty=penalize_incorrect_novelty,
                 correctness_threshold=correctness_threshold,
+                rnd_minibatch_size=cfg.rnd_minibatch_size,
+                curiosity_warmup_batches=cfg.curiosity_warmup_batches,
             )
             # END SEMANTIC_RND CODE
             metrics.update(prepare_minibatch_metrics)
@@ -1519,6 +1561,8 @@ async def do_train_step_and_get_sampling_client(
         rnd_update_steps=rnd_update_steps,
         penalize_incorrect_novelty=penalize_incorrect_novelty,
         correctness_threshold=correctness_threshold,
+        rnd_minibatch_size=cfg.rnd_minibatch_size,
+        curiosity_warmup_batches=cfg.curiosity_warmup_batches,
     )
     # END SEMANTIC_RND CODE
     metrics.update(prepare_minibatch_metrics)
@@ -1713,24 +1757,35 @@ async def main(
     # --- RND Initialization ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Initialize SemanticRND with encoder and RND networks
-    # IMPORTANT: concat_problem_answer=False is required for buffer-based training
-    # This mode stores problem and response embeddings separately for efficiency
-    novelty_model = SemanticRND(
-        encoder_model_name="Alibaba-NLP/gte-modernbert-base",
-        target_layers=(512, 512, 512),  # Target network architecture
-        predictor_layers=(512, 512, 512),  # Predictor network architecture
-        device=str(device),
-        max_length=8192,
-        concat_problem_answer=False,  # Required for buffer-based training
-        separator=" [SEP] ",
-        normalize_embeddings=False  # Default: no embedding normalization (safest)
-    )
+    # Only initialize RND if curiosity rewards are enabled
+    novelty_model = None
+    rnd_buffer = None
     
-    # RND buffer will be initialized after dataset is created
-    rnd_buffer = None  # Placeholder
-    
-    logger.info(f"Initialized SemanticRND module on {device}")
+    if cfg.use_rnd_curiosity:
+        # Initialize SemanticRND with encoder and RND networks
+        # IMPORTANT: concat_before_emb=False is required for buffer-based training
+        # This mode stores problem and response embeddings separately for efficiency
+        novelty_model = SemanticRND(
+            encoder_model_name="Alibaba-NLP/gte-modernbert-base",
+            target_layers=(128, 8),  # Target network architecture
+            predictor_layers=(256, 8),  # Predictor network architecture
+            device=str(device),
+            max_length=8192,
+            concat_before_emb=False,  # Required for buffer-based training
+            separator=" [SEP] ",
+            normalize_embeddings=True,  # Enable FIXED embedding normalization
+            embedding_load_file="embeddings/embeddings_gte_10000.pkl"  # Precomputed embeddings for normalizer
+        )
+        
+        # Reinitialize optimizer with learning rate from config
+        novelty_model._optimizer = torch.optim.Adam(
+            novelty_model.rnd.predictor_parameters(), 
+            lr=cfg.rnd_learning_rate
+        )
+        
+        logger.info(f"Initialized SemanticRND module on {device} with lr={cfg.rnd_learning_rate}")
+    else:
+        logger.info("RND curiosity rewards disabled (use_rnd_curiosity=False)")
     # --- End RND Initialization ---
     # END SEMANTIC_RND CODE
 
@@ -1790,30 +1845,31 @@ async def main(
     logger.info(f"Will train on {num_batches} batches")
 
     # BEGIN SEMANTIC_RND CODE
-    # Initialize RND buffer now that we have the dataset
-    # Get batch size (B) from the first batch of the dataset
-    first_batch = dataset.get_batch(0)
-    batch_size = len(first_batch)  # B = number of problems per batch
-    group_size = cfg.group_size    # G = number of rollouts per problem
-    
-    # Get embedding dimension from the novelty model
-    embedding_dim = novelty_model.embedding_dim
-    assert embedding_dim is not None, "SemanticRND embedding_dim should not be None after initialization"
-    
-    # Buffer stores S batches of B*G responses
-    rnd_buffer = RNDBuffer(
-        max_batches=cfg.rnd_buffer_size_multiplier,  # S
-        batch_size=batch_size,                        # B
-        group_size=group_size,                        # G
-        embedding_dim=embedding_dim,                  # D (single embedding dimension)
-        device=str(device),
-    )
-    
-    logger.info(
-        f"Initialized RND buffer: max_batches={cfg.rnd_buffer_size_multiplier}, "
-        f"batch_size={batch_size}, group_size={group_size}, "
-        f"capacity={cfg.rnd_buffer_size_multiplier * batch_size * group_size} responses"
-    )
+    # Initialize RND buffer now that we have the dataset (only if RND is enabled)
+    if cfg.use_rnd_curiosity and novelty_model is not None:
+        # Get batch size (B) from the first batch of the dataset
+        first_batch = dataset.get_batch(0)
+        batch_size = len(first_batch)  # B = number of problems per batch
+        group_size = cfg.group_size    # G = number of rollouts per problem
+        
+        # Get embedding dimension from the novelty model
+        embedding_dim = novelty_model.embedding_dim
+        assert embedding_dim is not None, "SemanticRND embedding_dim should not be None after initialization"
+        
+        # Buffer stores S batches of B*G responses
+        rnd_buffer = RNDBuffer(
+            max_batches=cfg.rnd_buffer_size_multiplier,  # S
+            batch_size=batch_size,                        # B
+            group_size=group_size,                        # G
+            embedding_dim=embedding_dim,                  # D (single embedding dimension)
+            device=str(device),
+        )
+        
+        logger.info(
+            f"Initialized RND buffer: max_batches={cfg.rnd_buffer_size_multiplier}, "
+            f"batch_size={batch_size}, group_size={group_size}, "
+            f"capacity={cfg.rnd_buffer_size_multiplier * batch_size * group_size} responses"
+        )
     # END SEMANTIC_RND CODE
 
     # BEGIN ADDED CODE

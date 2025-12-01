@@ -146,9 +146,9 @@ dataset = dataset.shuffle(seed=42)
 print(f"✓ Dataset loaded: {len(dataset)} total samples\n")
 
 # Configuration
-NUM_SAMPLES = 12000  # Number of samples to encode
-MAX_LENGTH = 512
-BATCH_SIZE = 16
+NUM_SAMPLES = 10000  # Number of samples to encode
+MAX_LENGTH = 1024
+BATCH_SIZE = 512
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 SAVE_DIR = 'embeddings'
 

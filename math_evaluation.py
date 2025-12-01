@@ -12,11 +12,13 @@ Usage:
 import asyncio
 import json
 import logging
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Iterator, Literal, Sequence
 
 import chz
 import numpy as np
@@ -38,6 +40,28 @@ from tinker_cookbook.utils.misc_utils import all_same
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+# ============================================================================
+# Logtree Scope Helper
+# ============================================================================
+
+
+@contextmanager
+def _get_logtree_scope(
+    log_path: str | None, num_groups_to_log: int, f_name: str, scope_name: str
+) -> Iterator[None]:
+    """
+    Creates a context manager; all logs inside this context will be logged under the section `scope_name`.
+    It will create a file with the path of log_path/f_name.html
+    If num_groups_to_log is 0 or log_path is None, it will disable logging.
+    """
+    if log_path is not None and num_groups_to_log > 0:
+        logtree_path = os.path.join(log_path, f"{f_name}.html")
+        with logtree.init_trace(scope_name, path=logtree_path):
+            yield
+    else:
+        yield
 
 
 # ============================================================================
@@ -65,7 +89,7 @@ class AIMEEnv(ProblemEnv):
     @classmethod
     def question_suffix(cls) -> str:
         """Suffix to add to the problem statement."""
-        return "\n\nPlease reason step by step, and put your final answer within \\boxed{}."
+        return "\n\nPlease reason step by step, and put your final answer within \\boxed{}.\nDo not overthink and over-verify, your reasoning must be concise, since your token budget (including all reasoning and thinking) is only 2500 tokens."
 
     def get_question(self) -> str:
         return self.problem + self.question_suffix()
@@ -300,6 +324,8 @@ class AIMEEvaluator(SamplingClientEvaluator):
         use_fewshot: bool = True,
         num_problems: int | None = None,
         name: str = "aime_2024",
+        log_path: str | None = None,
+        num_groups_to_log: int = 5,
     ):
         """
         Initialize the AIME evaluator.
@@ -312,6 +338,8 @@ class AIMEEvaluator(SamplingClientEvaluator):
             use_fewshot: Whether to use few-shot examples
             num_problems: Number of problems to evaluate (None = all)
             name: Name identifier for this evaluator (used for metric prefixing)
+            log_path: Path for saving logtree HTML logs (None = no logging)
+            num_groups_to_log: Number of problem groups to log to HTML (0 = disable)
         """
         self.name = name
         self.model_name = model_name
@@ -319,6 +347,8 @@ class AIMEEvaluator(SamplingClientEvaluator):
         self.max_tokens = max_tokens
         self.group_size = group_size
         self.use_fewshot = use_fewshot
+        self.log_path = log_path
+        self.num_groups_to_log = num_groups_to_log
 
         # Load dataset
         logger.info("Loading AIME 2024 dataset...")
@@ -349,28 +379,45 @@ class AIMEEvaluator(SamplingClientEvaluator):
         # Create policy
         policy = TinkerTokenCompleter(sampling_client, max_tokens=self.max_tokens)
 
+        # Generate timestamp for unique log file names
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         # Run rollouts for each problem
         trajectory_groups = []
-        for i, problem_data in enumerate(self.problems):
-            # Create environment builder
-            env_builder = create_aime_env_builder(
-                problem_data,
-                self.renderer,
-                convo_prefix=self.convo_prefix,
-                group_size=self.group_size,
-            )
+        with _get_logtree_scope(
+            log_path=self.log_path,
+            num_groups_to_log=self.num_groups_to_log,
+            f_name=f"trajectories_{self.name}_{timestamp}",
+            scope_name=f"Evaluation: {self.name}",
+        ):
+            for i, problem_data in enumerate(self.problems):
+                # Create environment builder
+                env_builder = create_aime_env_builder(
+                    problem_data,
+                    self.renderer,
+                    convo_prefix=self.convo_prefix,
+                    group_size=self.group_size,
+                )
 
-            # Enable logging for first few problems
-            enable_logging = i < 5
+                # Enable detailed logging for first few problems
+                enable_logging = i < self.num_groups_to_log
 
-            # Run rollout
-            with logtree.optional_enable_logging(enable=enable_logging):
-                traj_group = await do_group_rollout(env_builder, policy)
-                trajectory_groups.append(traj_group)
+                # Run rollout with logtree logging - wrap in section for this problem
+                with logtree.scope_header(f"Problem {i+1}: {problem_data['id']}"):
+                    with logtree.optional_enable_logging(enable=enable_logging):
+                        traj_group = await do_group_rollout(env_builder, policy)
+                        trajectory_groups.append(traj_group)
+                    
+                    # Log summary for this problem if logging is enabled
+                    if enable_logging:
+                        rewards = traj_group.get_total_rewards()
+                        best_idx = int(np.argmax(rewards))
+                        logtree.log_text(f"Best trajectory reward: {rewards[best_idx]:.2f}")
+                        logtree.log_text(f"All rewards: {[f'{r:.2f}' for r in rewards]}")
 
-            # Log progress
-            if (i + 1) % 5 == 0:
-                logger.info(f"Completed {i + 1}/{len(self.problems)} problems in {self.name}")
+                # Log progress
+                if (i + 1) % 5 == 0:
+                    logger.info(f"Completed {i + 1}/{len(self.problems)} problems in {self.name}")
 
         # Compute metrics
         logger.info("Computing metrics...")
@@ -398,6 +445,8 @@ class AIME2025Evaluator(SamplingClientEvaluator):
         use_fewshot: bool = True,
         num_problems: int | None = None,
         name: str = "aime_2025",
+        log_path: str | None = None,
+        num_groups_to_log: int = 5,
     ):
         """
         Initialize the AIME 2025 evaluator.
@@ -410,6 +459,8 @@ class AIME2025Evaluator(SamplingClientEvaluator):
             use_fewshot: Whether to use few-shot examples
             num_problems: Number of problems to evaluate (None = all)
             name: Name identifier for this evaluator (used for metric prefixing)
+            log_path: Path for saving logtree HTML logs (None = no logging)
+            num_groups_to_log: Number of problem groups to log to HTML (0 = disable)
         """
         self.name = name
         self.model_name = model_name
@@ -417,6 +468,8 @@ class AIME2025Evaluator(SamplingClientEvaluator):
         self.max_tokens = max_tokens
         self.group_size = group_size
         self.use_fewshot = use_fewshot
+        self.log_path = log_path
+        self.num_groups_to_log = num_groups_to_log
 
         # Load dataset
         logger.info("Loading AIME 2025 dataset...")
@@ -447,28 +500,45 @@ class AIME2025Evaluator(SamplingClientEvaluator):
         # Create policy
         policy = TinkerTokenCompleter(sampling_client, max_tokens=self.max_tokens)
 
+        # Generate timestamp for unique log file names
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         # Run rollouts for each problem
         trajectory_groups = []
-        for i, problem_data in enumerate(self.problems):
-            # Create environment builder
-            env_builder = create_aime_env_builder(
-                problem_data,
-                self.renderer,
-                convo_prefix=self.convo_prefix,
-                group_size=self.group_size,
-            )
+        with _get_logtree_scope(
+            log_path=self.log_path,
+            num_groups_to_log=self.num_groups_to_log,
+            f_name=f"trajectories_{self.name}_{timestamp}",
+            scope_name=f"Evaluation: {self.name}",
+        ):
+            for i, problem_data in enumerate(self.problems):
+                # Create environment builder
+                env_builder = create_aime_env_builder(
+                    problem_data,
+                    self.renderer,
+                    convo_prefix=self.convo_prefix,
+                    group_size=self.group_size,
+                )
 
-            # Enable logging for first few problems
-            enable_logging = i < 5
+                # Enable detailed logging for first few problems
+                enable_logging = i < self.num_groups_to_log
 
-            # Run rollout
-            with logtree.optional_enable_logging(enable=enable_logging):
-                traj_group = await do_group_rollout(env_builder, policy)
-                trajectory_groups.append(traj_group)
+                # Run rollout with logtree logging - wrap in section for this problem
+                with logtree.scope_header(f"Problem {i+1}: {problem_data['id']}"):
+                    with logtree.optional_enable_logging(enable=enable_logging):
+                        traj_group = await do_group_rollout(env_builder, policy)
+                        trajectory_groups.append(traj_group)
+                    
+                    # Log summary for this problem if logging is enabled
+                    if enable_logging:
+                        rewards = traj_group.get_total_rewards()
+                        best_idx = int(np.argmax(rewards))
+                        logtree.log_text(f"Best trajectory reward: {rewards[best_idx]:.2f}")
+                        logtree.log_text(f"All rewards: {[f'{r:.2f}' for r in rewards]}")
 
-            # Log progress
-            if (i + 1) % 5 == 0:
-                logger.info(f"Completed {i + 1}/{len(self.problems)} problems in {self.name}")
+                # Log progress
+                if (i + 1) % 5 == 0:
+                    logger.info(f"Completed {i + 1}/{len(self.problems)} problems in {self.name}")
 
         # Compute metrics
         logger.info("Computing metrics...")
@@ -635,6 +705,8 @@ class EvaluatorConfig:
         renderer_name: str,
         max_tokens: int,
         group_size: int,
+        log_path: str | None = None,
+        num_groups_to_log: int = 5,
     ) -> SamplingClientEvaluator:
         """
         Build the evaluator with the given shared parameters.
@@ -644,6 +716,8 @@ class EvaluatorConfig:
             renderer_name: Renderer name
             max_tokens: Max tokens to generate
             group_size: Number of samples per problem
+            log_path: Path for saving logtree HTML logs (None = no logging)
+            num_groups_to_log: Number of problem groups to log to HTML
             
         Returns:
             Configured SamplingClientEvaluator
@@ -657,6 +731,8 @@ class EvaluatorConfig:
                 use_fewshot=self.use_fewshot,
                 num_problems=self.num_problems,
                 name="aime_2024",
+                log_path=log_path,
+                num_groups_to_log=num_groups_to_log,
             )
         elif self.dataset == "aime_2025":
             return AIME2025Evaluator(
@@ -667,6 +743,8 @@ class EvaluatorConfig:
                 use_fewshot=self.use_fewshot,
                 num_problems=self.num_problems,
                 name="aime_2025",
+                log_path=log_path,
+                num_groups_to_log=num_groups_to_log,
             )
         else:
             raise ValueError(f"Unknown dataset: {self.dataset}")
@@ -681,11 +759,13 @@ class EvaluatorConfig:
 class EvalConfig:
     """Configuration for multi-evaluator evaluation."""
 
-    model_path: str | None = "tinker://a95b9543-d0b1-46c7-a5ab-7baa62d92906/sampler_weights/final"
+    # model_path: str | None = "tinker://a95b9543-d0b1-46c7-a5ab-7baa62d92906/sampler_weights/final"
     model_path: str | None = None
     model_name: str = "Qwen/Qwen3-30B-A3B"
+    # model_name: str = "openai/gpt-oss-20b"
     renderer_name: str = "qwen3"
-    max_tokens: int = 2048
+    # renderer_name: str = "gpt_oss_no_sysprompt"
+    max_tokens: int = 2500
     group_size: int = 2
     log_path: str | None = None
     save_detailed_results: bool = True
@@ -881,6 +961,8 @@ async def main(config: EvalConfig):
             renderer_name=config.renderer_name,
             max_tokens=config.max_tokens,
             group_size=config.group_size,
+            log_path=config.log_path,
+            num_groups_to_log=config.num_groups_to_log,
         )
         evaluators.append(evaluator)
         logger.info(f"  - {_get_evaluator_name(evaluator)}: {ev_cfg.dataset}")

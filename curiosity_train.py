@@ -3,9 +3,11 @@ Implements RL on general MDPs
 """
 
 import asyncio
+import gc
 import io
 import logging
 import os
+import psutil
 import time
 from typing import Any, Callable, List, Literal, Sequence, Iterator, Tuple
 
@@ -62,6 +64,33 @@ from llm_as_a_judge import GeminiJudge, JudgeResult
 from rnd import RNDBuffer
 
 logger = logging.getLogger(__name__)
+
+
+def get_memory_usage() -> dict:
+    """Get current CPU and GPU memory usage."""
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    
+    result = {
+        "cpu_rss_mb": mem_info.rss / (1024 * 1024),  # Resident Set Size
+        "cpu_vms_mb": mem_info.vms / (1024 * 1024),  # Virtual Memory Size
+    }
+    
+    if torch.cuda.is_available():
+        result["gpu_allocated_mb"] = torch.cuda.memory_allocated() / (1024 * 1024)
+        result["gpu_reserved_mb"] = torch.cuda.memory_reserved() / (1024 * 1024)
+        result["gpu_max_allocated_mb"] = torch.cuda.max_memory_allocated() / (1024 * 1024)
+    
+    return result
+
+
+def log_memory_usage(label: str, include_gpu: bool = True):
+    """Log current memory usage with a label."""
+    mem = get_memory_usage()
+    gpu_str = ""
+    if include_gpu and "gpu_allocated_mb" in mem:
+        gpu_str = f", GPU: {mem['gpu_allocated_mb']:.1f}MB alloc / {mem['gpu_reserved_mb']:.1f}MB reserved"
+    logger.info(f"[Memory] {label}: CPU RSS={mem['cpu_rss_mb']:.1f}MB, VMS={mem['cpu_vms_mb']:.1f}MB{gpu_str}")
 
 
 # BEGIN ADDED CODE
@@ -1173,6 +1202,8 @@ async def prepare_minibatch(
     # 6. Train RND for K steps sampling from buffer
     if novelty_model is not None and rnd_buffer is not None:
         with timed("compute_rnd_rewards", metrics):
+            log_memory_usage(f"  RND: before extract_problems_and_responses")
+            
             # Validate concat_before_emb mode
             if novelty_model.concat_before_emb:
                 raise ValueError(
@@ -1184,6 +1215,7 @@ async def prepare_minibatch(
             problems_B, responses_BG = await extract_problems_and_responses_separately(
                 trajectory_groups_P, env_group_builders_P, tokenizer
             )
+            log_memory_usage(f"  RND: after extract (B={len(problems_B)}, BG={len(responses_BG)})")
             
             B = len(problems_B)
             G = len(responses_BG) // B  # Number of rollouts per problem
@@ -1200,6 +1232,7 @@ async def prepare_minibatch(
             problem_embeddings_B, response_embeddings_BG = novelty_model.encode_problems_responses_separately(
                 problems_B, responses_BG
             )
+            log_memory_usage(f"  RND: after encoding embeddings")
             
             # Compute stratified normalized rewards using current RND state (BEFORE training)
             # This gives us rewards normalized within each group's correct/incorrect subsets
@@ -1212,12 +1245,14 @@ async def prepare_minibatch(
                 correctness_threshold=correctness_threshold,
                 penalize_incorrect=penalize_incorrect_novelty,
             )
+            log_memory_usage(f"  RND: after compute_rewards")
             
             # Determine correctness for buffer storage
             is_correct_BG = extrinsic_rewards_BG >= correctness_threshold
             
             # Add embeddings to buffer (for later RND training)
             rnd_buffer.add_batch(problem_embeddings_B, response_embeddings_BG, is_correct_BG)
+            log_memory_usage(f"  RND: after add_batch to buffer")
             
             # Add signed intrinsic rewards to the trajectories (only after warmup period)
             # During warmup, RND still trains but rewards are not added to RL training
@@ -1654,6 +1689,9 @@ async def do_sync_training(
             "progress/done_frac": (i_batch + 1) / num_batches,
         }
         t_start = time.time()
+        
+        # Log memory at start of batch
+        log_memory_usage(f"Batch {i_batch} START")
 
         # Run evaluations
         if cfg.eval_every > 0 and i_batch % cfg.eval_every == 0:
@@ -1662,6 +1700,7 @@ async def do_sync_training(
                     evaluators, sampling_client, cfg, i_batch
                 )
                 metrics.update(eval_metrics)
+            log_memory_usage(f"Batch {i_batch} after run_evals")
 
         # Get batch and sample trajectories
         env_group_builders_P = dataset.get_batch(i_batch)
@@ -1693,6 +1732,7 @@ async def do_sync_training(
             for trajectory_group in trajectory_groups_P
             if trajectory_group is not None
         ]
+        log_memory_usage(f"Batch {i_batch} after trajectory sampling")
 
         # Train step
         # BEGIN SEMANTIC_RND CODE
@@ -1714,11 +1754,26 @@ async def do_sync_training(
             correctness_threshold=correctness_threshold,
         )
         # END SEMANTIC_RND CODE
+        log_memory_usage(f"Batch {i_batch} after train_step")
 
         # Log metrics
         metrics.update(train_step_metrics)
         metrics["time/total"] = time.time() - t_start
+        
+        # Add memory metrics
+        mem = get_memory_usage()
+        metrics["memory/cpu_rss_mb"] = mem["cpu_rss_mb"]
+        if "gpu_allocated_mb" in mem:
+            metrics["memory/gpu_allocated_mb"] = mem["gpu_allocated_mb"]
+            metrics["memory/gpu_reserved_mb"] = mem["gpu_reserved_mb"]
+        
         ml_logger.log_metrics(metrics, step=i_batch)
+        
+        # Explicit garbage collection to prevent memory accumulation
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        log_memory_usage(f"Batch {i_batch} END (after gc)")
 # END ADDED CODE
 
 
@@ -1796,7 +1851,7 @@ async def main(
     if cfg.use_reasoning_rewards:
         from llm_as_a_judge import GEMINI_MATH_JUDGE_SYSTEM_PROMPT
         gemini_judge = GeminiJudge(
-            model_name="gemini-2.0-flash-lite",
+            model_name="gemini-2.5-flash-lite",
             system_prompt=GEMINI_MATH_JUDGE_SYSTEM_PROMPT
         )
         logger.info(f"Initialized GeminiJudge for reasoning-level rewards (coef={cfg.reasoning_reward_coef})")
@@ -1877,6 +1932,9 @@ async def main(
     # BEGIN SEMANTIC_RND CODE
     # RND configuration - use config values
     intrinsic_reward_coef = cfg.curiosity_reward_coef
+    
+    # Log memory usage before starting training loop
+    log_memory_usage("Before training loop START")
     
     # Training loop
     if cfg.async_config is not None:

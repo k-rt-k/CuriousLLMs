@@ -1,0 +1,11 @@
+{"time":"2025-12-01T19:46:48.364180915-05:00","level":"INFO","msg":"stream: starting","core version":"0.22.3"}
+{"time":"2025-12-01T19:46:48.55682788-05:00","level":"INFO","msg":"stream: created new stream","id":"h7i22pap"}
+{"time":"2025-12-01T19:46:48.556936761-05:00","level":"INFO","msg":"handler: started","stream_id":"h7i22pap"}
+{"time":"2025-12-01T19:46:48.557195265-05:00","level":"INFO","msg":"stream: started","id":"h7i22pap"}
+{"time":"2025-12-01T19:46:48.557205175-05:00","level":"INFO","msg":"writer: started","stream_id":"h7i22pap"}
+{"time":"2025-12-01T19:46:48.557229655-05:00","level":"INFO","msg":"sender: started","stream_id":"h7i22pap"}
+{"time":"2025-12-01T21:08:14.787846826-05:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":1908}
+{"time":"2025-12-01T21:08:30.128943535-05:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":1940}
+{"time":"2025-12-01T21:08:14.788584456-05:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":1}
+{"time":"2025-12-01T21:08:30.136402332-05:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":1}
+{"time":"2025-12-01T22:01:59.076287323-05:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/CuriousLMs/rnd_train/h7i22pap/file_stream\": dial tcp: lookup api.wandb.ai on 10.1.1.1:53: read udp 10.1.1.89:56684->10.1.1.1:53: i/o timeout"}

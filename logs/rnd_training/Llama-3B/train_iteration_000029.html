@@ -1,0 +1,5203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>RL Iteration 29</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    background: var(--lt-bg, #f5f5f5);
+    color: var(--lt-text, #333);
+}
+
+.lt-root {
+    background: var(--lt-card, white);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.lt-title {
+    margin: 0 0 0.5rem 0;
+    color: var(--lt-accent, #2563eb);
+    border-bottom: 2px solid var(--lt-border, #e5e7eb);
+    padding-bottom: 0.5rem;
+}
+
+.lt-subtitle {
+    color: var(--lt-sub, #666);
+    font-size: 0.875rem;
+    margin-bottom: 2rem;
+}
+
+.lt-section {
+    margin: 1.5rem 0;
+    padding-left: 1rem;
+    border-left: 2px solid var(--lt-border, #e5e7eb);
+}
+
+.lt-section-body {
+    margin-top: 0.5rem;
+}
+
+.lt-section h2, .lt-section h3, .lt-section h4, .lt-section h5, .lt-section h6 {
+    margin: 0.5rem 0;
+    color: var(--lt-accent, #2563eb);
+}
+
+.lt-p {
+    margin: 0.5rem 0;
+    white-space: pre-wrap;
+}
+
+.lt-details {
+    margin: 0.5rem 0;
+    border: 1px solid var(--lt-border, #e5e7eb);
+    border-radius: 4px;
+    padding: 0.5rem;
+}
+
+.lt-details summary {
+    cursor: pointer;
+    font-weight: 600;
+    user-select: none;
+}
+
+.lt-details-body {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: var(--lt-bg, #f5f5f5);
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+.lt-details-body pre {
+    margin: 0;
+    font-family: var(--lt-mono, "Courier New", monospace);
+    font-size: 0.875rem;
+    white-space: pre-wrap;
+}
+
+.lt-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.875rem;
+}
+
+.lt-table th {
+    background: var(--lt-accent, #2563eb);
+    color: white;
+    padding: 0.5rem;
+    text-align: left;
+    font-weight: 600;
+}
+
+.lt-table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--lt-border, #e5e7eb);
+}
+
+.lt-table tr:nth-child(even) {
+    background: var(--lt-bg, #f5f5f5);
+}
+
+.lt-table-caption {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--lt-text, #333);
+}
+
+.lt-exc {
+    background: #fee;
+    border: 2px solid #c00;
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.lt-exc summary {
+    color: #c00;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.lt-exc pre {
+    margin-top: 0.5rem;
+    font-family: var(--lt-mono, "Courier New", monospace);
+    font-size: 0.875rem;
+    overflow-x: auto;
+}
+
+.answer, .reward {
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    display: inline-block;
+    margin: 0.25rem 0;
+}
+
+.answer {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.reward {
+    background: #dcfce7;
+    color: #166534;
+}
+
+</style></head>
+<body class="lt-root">
+  <h1 class="lt-title">
+RL Iteration 29  </h1>
+  <div class="lt-subtitle">
+Generated 2025-12-01T21:15:30  </div>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 2 \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f(r) = \sum_{j=2}^{2008} \frac{1}{j^r} = \frac{1}{2^r}+ \frac{1}{3^r}+ \dots + \frac{1}{2008^r}$. Find $\sum_{k=2}^{\infty} f(k)$. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: We change the order of summation: \[
+\sum_{k=2}^\infty \sum_{j=2}^{2008} \frac{1}{j^k}
+= \sum_{j=2}^{2008} \sum_{k=2}^\infty \frac{1}{j^k}
+= \sum_{j=2}^{2008} \frac{1}{j^2(1 - \frac{1}{j})}
+= \sum_{j=2}^{2008} \frac{1}{j(j-1)}
+= \sum_{j=2}^{2008} \displaystyle \left( \frac 1 {j-1} - \frac 1 j \displaystyle \right)
+= 1 - \frac 1 {2008}
+= \boxed{\frac{2007}{2008}}.
+\]          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+187                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2\sqrt{3}/3}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1.5}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{6}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{3}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2\sqrt{2}}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1.41}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 3\boxed{3}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2\sqrt{2}}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{PF=1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2\sqrt{3}}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: In the diagram, $\triangle PQR$ is right-angled at $P$ and has $PQ=2$ and $PR=2\sqrt{3}$.  Altitude $PL$ intersects median $RM$ at $F$.  What is the length of $PF$? [asy]
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy] Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: Since $PQ=2$ and $M$ is the midpoint of $PQ$, then $PM = MQ =\frac{1}{2}(2)=1$.
+
+Since $\triangle PQR$ is right-angled at $P$, then by the Pythagorean Theorem,  \[ RQ = \sqrt{PQ^2+PR^2} = \sqrt{2^2+(2\sqrt{3})^2}=\sqrt{4+12}=\sqrt{16}=4. \](Note that we could say that $\triangle PQR$ is a $30^\circ$-$60^\circ$-$90^\circ$ triangle, but we do not actually need this fact.)
+
+Since $PL$ is an altitude, then $\angle PLR = 90^\circ$, so $\triangle RLP$ is similar to $\triangle RPQ$ (these triangles have right angles at $L$ and $P$ respectively, and a common angle at $R$).
+
+Therefore, $\frac{PL}{QP}=\frac{RP}{RQ}$ or $PL = \frac{(QP)(RP)}{RQ}= \frac{2(2\sqrt{3})}{4}=\sqrt{3}$.
+
+Similarly, $\frac{RL}{RP} = \frac{RP}{RQ}$ so $RL = \frac{(RP)(RP)}{RQ} = \frac{(2\sqrt{3})(2\sqrt{3})}{4}=3$.
+
+Therefore, $LQ=RQ-RL=4-3=1$ and $PF = PL - FL = \sqrt{3}-FL$.
+
+So we need to determine the length of $FL$.
+
+Drop a perpendicular from $M$ to $X$ on $RQ$.
+
+[asy]
+draw((5,0)--(8.75,2.17)); label(&quot;$X$&quot;,(8.75,2.17),NE);
+draw((7.99,1.72)--(8.43,.94)--(9.20,1.39));
+draw((0,0)--(10,0)--(0,10*sqrt(3))--cycle);
+draw((0,0)--(7.5,4.33)); draw((0,10*sqrt(3))--(5,0));
+draw((6.68,3.86)--(7.17,3.01)--(7.99,3.49));
+label(&quot;$P$&quot;,(0,0),SW); label(&quot;$M$&quot;,(5,0),S); label(&quot;$Q$&quot;,(10,0),SE);
+
+label(&quot;$L$&quot;,(7.5,4.33),NE); label(&quot;$R$&quot;,(0,10*sqrt(3)),N); label(&quot;$F$&quot;,(4.29,2.47),NW);
+[/asy]
+
+Then $\triangle MXQ$ is similar to $\triangle PLQ$, since these triangles are each right-angled and they share a common angle at $Q$.  Since $MQ = \frac{1}{2}PQ$, then the corresponding sides of $\triangle MXQ$ are half as long as those of $\triangle PLQ$.
+
+Therefore, $QX=\frac{1}{2}QL=\frac{1}{2}(1)=\frac{1}{2}$ and $MX = \frac{1}{2}PL = \frac{1}{2}(\sqrt{3})=\frac{\sqrt{3}}{2}$.
+
+Since $QX=\frac{1}{2}$, then $RX = RQ-QX = 4 - \frac{1}{2}=\frac{7}{2}$.
+
+Now $\triangle RLF$ is similar to $\triangle RXM$ (they are each right-angled and share a common angle at $R$).
+
+Therefore, $\frac{FL}{MX}=\frac{RL}{RX}$ so $FL = \frac{(MX)(RL)}{RX}=\frac{\frac{\sqrt{3}}{2}(3)}{\frac{7}{2}} = \frac{3\sqrt{3}}{7}$.
+
+Thus, $PF = \sqrt{3} - \frac{3\sqrt{3}}{7} = \boxed{\frac{4\sqrt{3}}{7}}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+13                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+11                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+11                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+12                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+336                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 720^\circ \boxed{720}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 720 \boxed{720}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 720 \boxed{720}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The solutions to $z^4 = 4 - 4i \sqrt{3}$ can be expressed in the form
+\begin{align*}
+z_1 &amp;= r_1 (\cos \theta_1 + i \sin \theta_1), \\
+z_2 &amp;= r_2 (\cos \theta_2 + i \sin \theta_2), \\
+z_3 &amp;= r_3 (\cos \theta_3 + i \sin \theta_3), \\
+z_4 &amp;= r_4 (\cos \theta_4 + i \sin \theta_4),
+\end{align*}where $r_k &gt; 0$ and $0^\circ \le \theta_k &lt; 360^\circ.$  Find $\theta_1 + \theta_2 + \theta_3 + \theta_4,$ in degrees. Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 360 \boxed{360}          </p>
+          <p class="lt-p">
+Reference Answer: First, we can write $z^4 = 4 - 4i \sqrt{3} = 8 \operatorname{cis} 300^\circ.$  Therefore, the four roots are
+\begin{align*}
+&amp;\sqrt[4]{8} \operatorname{cis} 75^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 90^\circ) = \sqrt[4]{8} \operatorname{cis} 165^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 180^\circ) = \sqrt[4]{8} \operatorname{cis} 255^\circ, \\
+&amp;\sqrt[4]{8} \operatorname{cis} (75^\circ + 270^\circ) = \sqrt[4]{8} \operatorname{cis} 345^\circ.
+\end{align*}Then $\theta_1 + \theta_2 + \theta_3 + \theta_4 = 75^\circ + 165^\circ + 255^\circ + 345^\circ = \boxed{840^\circ}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+11                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+287                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sequence 12, 15, 18, 21, 51, 81, $\ldots$ consists of all positive multiples of 3 that contain at least one digit that is a 1. What is the $50^{\mathrm{th}}$ term of the sequence? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 81 \boxed{81}          </p>
+          <p class="lt-p">
+Reference Answer: We know that the rule for divisibility by $3$ is that the digits of the number must add up to a multiple of $3$. So, it&#x27;s clear that there are no other such two-digit numbers beyond the ones listed in the problem. Every number divisible by $3$ between $100$ and $199$ is in the sequence, so that gets us through the $39$th term of the sequence. Using the rule for divisibility by $3$, it is fairly simple to list out the remaining $11$ terms of the sequence: $201, 210, 213, 216, 219, 231, 261, 291, 312, 315, 318$. Thus, the $50$th term is $\boxed{318}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+170                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+</body>
+</html>

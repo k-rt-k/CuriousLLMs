@@ -1,0 +1,4499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>RL Iteration 23</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    background: var(--lt-bg, #f5f5f5);
+    color: var(--lt-text, #333);
+}
+
+.lt-root {
+    background: var(--lt-card, white);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.lt-title {
+    margin: 0 0 0.5rem 0;
+    color: var(--lt-accent, #2563eb);
+    border-bottom: 2px solid var(--lt-border, #e5e7eb);
+    padding-bottom: 0.5rem;
+}
+
+.lt-subtitle {
+    color: var(--lt-sub, #666);
+    font-size: 0.875rem;
+    margin-bottom: 2rem;
+}
+
+.lt-section {
+    margin: 1.5rem 0;
+    padding-left: 1rem;
+    border-left: 2px solid var(--lt-border, #e5e7eb);
+}
+
+.lt-section-body {
+    margin-top: 0.5rem;
+}
+
+.lt-section h2, .lt-section h3, .lt-section h4, .lt-section h5, .lt-section h6 {
+    margin: 0.5rem 0;
+    color: var(--lt-accent, #2563eb);
+}
+
+.lt-p {
+    margin: 0.5rem 0;
+    white-space: pre-wrap;
+}
+
+.lt-details {
+    margin: 0.5rem 0;
+    border: 1px solid var(--lt-border, #e5e7eb);
+    border-radius: 4px;
+    padding: 0.5rem;
+}
+
+.lt-details summary {
+    cursor: pointer;
+    font-weight: 600;
+    user-select: none;
+}
+
+.lt-details-body {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: var(--lt-bg, #f5f5f5);
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+.lt-details-body pre {
+    margin: 0;
+    font-family: var(--lt-mono, "Courier New", monospace);
+    font-size: 0.875rem;
+    white-space: pre-wrap;
+}
+
+.lt-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.875rem;
+}
+
+.lt-table th {
+    background: var(--lt-accent, #2563eb);
+    color: white;
+    padding: 0.5rem;
+    text-align: left;
+    font-weight: 600;
+}
+
+.lt-table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--lt-border, #e5e7eb);
+}
+
+.lt-table tr:nth-child(even) {
+    background: var(--lt-bg, #f5f5f5);
+}
+
+.lt-table-caption {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--lt-text, #333);
+}
+
+.lt-exc {
+    background: #fee;
+    border: 2px solid #c00;
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.lt-exc summary {
+    color: #c00;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.lt-exc pre {
+    margin-top: 0.5rem;
+    font-family: var(--lt-mono, "Courier New", monospace);
+    font-size: 0.875rem;
+    overflow-x: auto;
+}
+
+.answer, .reward {
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    display: inline-block;
+    margin: 0.25rem 0;
+}
+
+.answer {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.reward {
+    background: #dcfce7;
+    color: #166534;
+}
+
+</style></head>
+<body class="lt-root">
+  <h1 class="lt-title">
+RL Iteration 23  </h1>
+  <div class="lt-subtitle">
+Generated 2025-12-01T20:46:12  </div>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: $0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 3 \boxed{3}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 6 \boxed{6}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{3}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 6 \boxed{6}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Let $f : \mathbb{R} \to \mathbb{R}$ be a function such that
+\[f(f(x) - y) = f(x) + f(f(y) - f(-x)) + x\]for all real numbers $x$ and $y.$
+
+Let $n$ be the number of possible values of $f(3),$ and let $s$ be the sum of all possible values of $f(3).$  Find $n \times s.$ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: $0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Setting $x = y = 0,$ we get
+\[f(f(0)) = 2f(0).\]Let $c = f(0),$ so $f(c) = 2c.$
+
+Setting $x = 0$ and $y = c,$ we get
+\[f(0) = f(0) + f(f(c) - c).\]Then $f(c) = 0,$ so $c = 0.$
+
+Setting $x = 0,$ we get
+\[f(-y) = f(f(y))\]for all $y.$
+
+Setting $y = f(x),$ we get
+\[0 = f(x) + f(f(f(x)) - f(-x)) + x.\]Since $f(f(x)) = f(-x),$ this becomes $f(x) = -x$ for all $x.$  We can check that this function works.
+
+Thus, $n = 1$ and $s = -3,$ so $n \times s = \boxed{-3}.$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+214                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 5 \boxed{5}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 3 \boxed{3}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 23 \boxed{23}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 12 - 35 = -23 \boxed{-23}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 7 \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 7 \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 5 \boxed{5}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 7 \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 3 \boxed{3}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 11 \boxed{11}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 5 \boxed{5}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 7 \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: The sum of two numbers is 12 and their product is 35. What is the positive difference between the numbers? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 7 \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: Let $x$ and $y$ be the two numbers.  We are given  \begin{align*}
+x+y&amp;=12\text{, and} \\
+xy&amp;=35.
+\end{align*} Solving the first equation for $y$ and substituting into the second equation, we find $x(12-x)=35$.  Subtracting the left-hand side from both sides of the equation and distributing, we find $0=x^2-12x+35$.  We can factor the right-hand side as $(x-7)(x-5)$, so the solutions are $x=7$ and $x=5$.  Substituting either of these back into $y=12-x$, we find that the two numbers are $7$ and $5$, and their difference is $\boxed{2}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+15                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+133                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: There are $\frac{2}{3} \cdot \frac{2}{3} = \frac{4}{9}$ total possible outcomes. Each of these results in a total of one six. \boxed{10}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{5}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{5}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{4}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{7}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 4 \boxed{4}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{2}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: Charles has two six-sided die. One of the die is fair, and the other die is biased so that it comes up six with probability $\frac{2}{3}$ and each of the other five sides has probability $\frac{1}{15}$. Charles chooses one of the two dice at random and rolls it three times. Given that the first two rolls are both sixes, the probability that the third roll will also be a six is $\frac{p}{q}$, where $p$ and $q$ are relatively prime positive integers. Find $p+q$.
+ Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{1}          </p>
+          <p class="lt-p">
+Reference Answer: The probability that he rolls a six twice when using the fair die is $\frac{1}{6}\times \frac{1}{6}=\frac{1}{36}$. The probability that he rolls a six twice using the biased die is $\frac{2}{3}\times \frac{2}{3}=\frac{4}{9}=\frac{16}{36}$. Given that Charles rolled two sixes, we can see that it is $16$ times more likely that he chose the second die. Therefore the probability that he is using the fair die is $\frac{1}{17}$, and the probability that he is using the biased die is $\frac{16}{17}$. The probability of rolling a third six is
+\[\frac{1}{17}\times \frac{1}{6} + \frac{16}{17} \times \frac{2}{3} = \frac{1}{102}+\frac{32}{51}=\frac{65}{102}\]Therefore, our desired $p+q$ is $65+102= \boxed{167}$          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+48                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+228                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+  <section class="lt-section">
+    <h2 class="lt-h2">
+do_group_rollout    </h2>
+    <div class="lt-section-body">
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62. \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: \boxed{122}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62+60+58+56+54+52+50+48+46+44+42+40+38+36+34+32+30+28+26+24+22+20+18+16+14+12+10+8+6+4+2+0.\boxed{620}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 0 \boxed{0}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62 \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+do_single_rollout        </h3>
+        <div class="lt-section-body">
+          <p class="lt-p">
+Problem: What is the sum of the even, positive integers less than 62? Write your answer in \boxed{} format.          </p>
+          <p class="lt-p">
+Response: 62. \boxed{62}          </p>
+          <p class="lt-p">
+Reference Answer: We are summing up $2+4+6+\cdots+60$. Factoring out a 2 and simplifying, we have $2(1+2+3+\cdots+30)=2\cdot\frac{30\cdot31}{2}=\boxed{930}$.          </p>
+          <p class="lt-p">
+Format Valid: ✓, Correct: ✗, Reward: 0.00          </p>
+        </div>
+      </section>
+      <section class="lt-section">
+        <h3 class="lt-h3">
+Trajectory Summary        </h3>
+        <div class="lt-section-body">
+          <div class="lt-table-caption">
+Trajectory 0          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+10                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 1          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 2          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 3          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 4          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 5          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+7                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 6          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 7          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+71                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 8          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 9          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 10          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 11          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 12          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 13          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 14          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+9                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="lt-table-caption">
+Trajectory 15          </div>
+          <table class="lt-table">
+            <thead>
+              <tr>
+                <th>
+step                </th>
+                <th>
+ob_len                </th>
+                <th>
+ac_len                </th>
+                <th>
+reward                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+0                </td>
+                <td>
+124                </td>
+                <td>
+10                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+final                </td>
+                <td>
+0                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+              <tr>
+                <td>
+total                </td>
+                <td>
+-                </td>
+                <td>
+-                </td>
+                <td>
+0.000                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+</body>
+</html>

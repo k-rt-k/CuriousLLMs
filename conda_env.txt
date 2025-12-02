@@ -1,0 +1,18 @@
+name: llm
+channels:
+  - defaults
+dependencies:
+  - langchain
+  - ipykernel
+  - plotly
+  - wandb
+  - jupyter
+  - tqdm
+  - numpy
+  - transformers
+  - google-genai
+  - matplotlib
+  - pip
+  - ragas
+  - python=3.13
+prefix: /home/hpoonia/miniconda3/envs/llm

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Tuple
 
 import chz
 from tinker_cookbook import cli_utils, model_info
@@ -44,14 +44,15 @@ class CLIConfig:
     # Logging configuration
     log_path: str | None = None
     wandb_project: str | None = "rnd_train"
+    wandb_entity: str | None = "CuriousLMs"
     wandb_name: str | None = "Llama-3B"
     compute_post_kl: bool = False
 
     # Evals
-    eval_every: int = 20
+    eval_every: int = 6
 
     # Checkpointing
-    save_every: int = 20
+    save_every: int = 4
 
     # Service configuration
     base_url: str | None = None
@@ -73,11 +74,13 @@ class CLIConfig:
     rnd_buffer_size_multiplier: int = 5  # S = buffer holds S batches of rollouts
     rnd_update_steps: int = 50  # K = number of RND gradient updates per LLM batch
     rnd_minibatch_size: int = min(1024, group_size * groups_per_batch)  # N = samples per RND update (default = B*G)
-    curiosity_reward_coef: float = 0.2  # Coefficient for curiosity rewards
+    curiosity_reward_coef: float|Tuple[float, float] = 0.2  # Coefficient for curiosity rewards
     rnd_learning_rate: float = 1e-3  # Learning rate for RND predictor
     penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
     correctness_threshold: float = 0.6  # Threshold for determining correctness (reward >= threshold)
     curiosity_warmup_batches: int = 20  # Number of batches before curiosity rewards are added (RND still trains during warmup)
+    target_layers: Tuple[int, ...] = (128, 8)  # Target network architecture
+    predictor_layers: Tuple[int, ...] = (256, 8)  # Predictor network architecture
     # END SEMANTIC_RND CODE
 
     # Mixed dataset configuration (only used when env="mixed")
@@ -85,6 +88,10 @@ class CLIConfig:
     deepmath_train_size: int = 6000
     deepmath_test_size: int = 500
     deepmath_seed: int = 42
+    
+    # Dataset scheduling for warmup/main phases
+    # Options: "e-h" (easy→hard), "m-h" (mixed→hard), "e-m" (easy→mixed), "m-m" (mixed→mixed)
+    dataset_schedule: Literal["e-h", "m-h", "e-m", "m-m"] = "m-m"
 
 
 def get_dataset_builder(
@@ -163,11 +170,35 @@ async def cli_main(cli_config: CLIConfig):
         wandb_name = cli_config.wandb_name
     else:
         wandb_name = run_name
+    
+    # Determine dataset builders based on schedule
+    warmup_type, main_type = cli_config.dataset_schedule.split('-')
+    
+    # Map schedule codes to dataset names
+    schedule_map = {"e": "math", "h": "deepmath", "m": "mixed"}
+    warmup_env = schedule_map[warmup_type]
+    main_env = schedule_map[main_type]
+    
+    # Create warmup dataset builder
+    warmup_dataset_builder = get_dataset_builder(
+        env=warmup_env,
+        batch_size=cli_config.groups_per_batch,
+        model_name=cli_config.model_name,
+        renderer_name=renderer_name,
+        group_size=cli_config.group_size,
+        seed=cli_config.seed,
+        math_train_size=cli_config.math_train_size,
+        deepmath_train_size=cli_config.deepmath_train_size,
+        deepmath_test_size=cli_config.deepmath_test_size,
+        deepmath_seed=cli_config.deepmath_seed,
+    )
+    main_dataset_env = main_env
+    
     # Create full config
     config = Config(
         learning_rate=cli_config.learning_rate,
         dataset_builder=get_dataset_builder(
-            env=cli_config.env,
+            env=main_dataset_env,
             batch_size=cli_config.groups_per_batch,
             model_name=cli_config.model_name,
             renderer_name=renderer_name,
@@ -183,6 +214,7 @@ async def cli_main(cli_config: CLIConfig):
         lora_rank=cli_config.lora_rank,
         max_tokens=cli_config.max_tokens,
         wandb_project=cli_config.wandb_project,
+        wandb_entity=cli_config.wandb_entity,
         wandb_name=wandb_name,
         log_path=log_path,
         base_url=cli_config.base_url,
@@ -214,6 +246,10 @@ async def cli_main(cli_config: CLIConfig):
         penalize_incorrect_novelty=cli_config.penalize_incorrect_novelty,
         correctness_threshold=cli_config.correctness_threshold,
         curiosity_warmup_batches=cli_config.curiosity_warmup_batches,
+        target_layers=cli_config.target_layers,
+        predictor_layers=cli_config.predictor_layers,
+        dataset_schedule=cli_config.dataset_schedule,
+        warmup_dataset_builder=warmup_dataset_builder,
         # END SEMANTIC_RND CODE
     )
 

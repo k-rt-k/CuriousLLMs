@@ -581,6 +581,64 @@ class RNDBuffer:
         """Check if buffer is at capacity."""
         return self.num_batches_stored >= self.max_batches
 
+    def save_state(self, path: str) -> None:
+        """
+        Save buffer state to disk for checkpointing.
+        
+        Args:
+            path: Path to save the buffer state (.pt file)
+        """
+        state = {
+            'problem_embs': self.problem_embs.cpu(),
+            'response_embs': self.response_embs.cpu(),
+            'correctness': self.correctness.cpu(),
+            'num_batches_stored': self.num_batches_stored,
+            'write_batch_idx': self.write_batch_idx,
+            # Save config for validation on load
+            'config': {
+                'max_batches': self.max_batches,
+                'batch_size': self.batch_size,
+                'group_size': self.group_size,
+                'embedding_dim': self.embedding_dim,
+            }
+        }
+        torch.save(state, path)
+        logger.info(f"[RNDBuffer] Saved state to {path} (batches={self.num_batches_stored})")
+
+    def load_state(self, path: str) -> None:
+        """
+        Load buffer state from disk.
+        
+        Args:
+            path: Path to load the buffer state from (.pt file)
+        
+        Raises:
+            ValueError: If buffer configuration doesn't match saved state
+        """
+        state = torch.load(path, map_location=self.device)
+        
+        # Validate configuration matches
+        config = state['config']
+        if (config['max_batches'] != self.max_batches or
+            config['batch_size'] != self.batch_size or
+            config['group_size'] != self.group_size or
+            config['embedding_dim'] != self.embedding_dim):
+            raise ValueError(
+                f"Buffer configuration mismatch! "
+                f"Expected: max_batches={self.max_batches}, batch_size={self.batch_size}, "
+                f"group_size={self.group_size}, embedding_dim={self.embedding_dim}. "
+                f"Got: {config}"
+            )
+        
+        # Restore state
+        self.problem_embs.copy_(state['problem_embs'].to(self.device))
+        self.response_embs.copy_(state['response_embs'].to(self.device))
+        self.correctness.copy_(state['correctness'].to(self.device))
+        self.num_batches_stored = state['num_batches_stored']
+        self.write_batch_idx = state['write_batch_idx']
+        
+        logger.info(f"[RNDBuffer] Loaded state from {path} (batches={self.num_batches_stored})")
+
 
 class SemanticRND(nn.Module):
     """
@@ -939,7 +997,7 @@ class SemanticRND(nn.Module):
         self,
         problems: List[str],
         responses: List[str],
-        response_batch_size: int = 205
+        response_batch_size: int = 64# 205
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encode problems and responses separately for buffer-based training.
@@ -1096,7 +1154,7 @@ class SemanticRND(nn.Module):
         response_embeddings: torch.Tensor,
         extrinsic_rewards: torch.Tensor,
         group_size: int,
-        curiosity_coef: float, #TODO: different coefficients for correct and incorrect?
+        curiosity_coef: float|Tuple[float, float], #TODO: different coefficients for correct and incorrect?
         correctness_threshold: float = 0.5,
         penalize_incorrect: bool = True,
         update_rnd_stats: bool = True
@@ -1127,33 +1185,53 @@ class SemanticRND(nn.Module):
         Returns:
             signed_rewards: Tensor of shape [B*G] with signed curiosity rewards
         """
+        if isinstance(curiosity_coef, tuple):
+            pos_curiosity_coef, neg_curiosity_coef = curiosity_coef
+        else:
+            pos_curiosity_coef = neg_curiosity_coef = curiosity_coef
+
+
         # 1. Compute RND rewards WITH running mean/std normalization
         # This uses the standard RND normalization (running mean/std)
         rnd_normalized_rewards = self.compute_normalized_rewards_from_embeddings(
             problem_embeddings, response_embeddings, group_size,
             update_stats=update_rnd_stats
         )
+        ## clip to -3,3
+        rnd_normalized_rewards = torch.clamp(rnd_normalized_rewards, -3.0, 3.0)
         
         # 2. Determine correctness
         correctness = extrinsic_rewards >= correctness_threshold
         
+
         # 3. Stratified min-max normalization within groups
         # This normalizes the already RND-normalized rewards within each group's 
         # correct/incorrect subsets to [0, 1]
-        stratified_normalized_rewards = normalize_rewards_stratified_groupwise(
-            rnd_normalized_rewards, correctness, group_size
-        )
+        if True:
+            stratified_normalized_rewards = normalize_rewards_stratified_groupwise(
+                rnd_normalized_rewards, 
+                # correctness, 
+                group_size
+            )
+        else:
+            # For debugging: skip stratified normalization
+            stratified_normalized_rewards = rnd_normalized_rewards
         
+        ## each group reward is between 0 and 1 now
+
         # 4. Apply signed coefficient
         if penalize_incorrect:
             signed_rewards = apply_signed_curiosity_rewards(
-                stratified_normalized_rewards, correctness, curiosity_coef
+                stratified_normalized_rewards, 
+                correctness, 
+                pos_curiosity_coef, 
+                neg_curiosity_coef
             )
         else:
             # Only reward correct, no penalty for incorrect
             signed_rewards = torch.where(
                 correctness,
-                curiosity_coef * stratified_normalized_rewards,
+                pos_curiosity_coef * stratified_normalized_rewards,
                 torch.zeros_like(stratified_normalized_rewards)
             )
         
@@ -1187,10 +1265,121 @@ class SemanticRND(nn.Module):
         
         return loss.item()
 
+    def save_state(self, path: str) -> None:
+        """
+        Save SemanticRND state to disk for checkpointing.
+        
+        SAVES (completely checkpoint-able state):
+        - RND target network weights (frozen random reference)
+        - RND predictor network weights (learnable parameters)
+        - Optimizer state (momentum, moving averages, step counts for Adam/SGD)
+        - Reward normalizer running statistics (mean/var for reward normalization)
+        - Embedding normalizer statistics (if enabled, fixed/frozen)
+        
+        Does NOT save (frozen/reloadable):
+        - Encoder (frozen, loaded from HuggingFace on init)
+        
+        Note: Target network is now saved to ensure exact reproducibility when resuming training.
+        This preserves the exact random initialization across checkpoint loads.
+        
+        Args:
+            path: Path to save the state (.pt file)
+        """
+        state = {
+            # Target network weights (frozen random reference)
+            'target_state_dict': self.rnd.target_network.state_dict(),
+            # Predictor network weights
+            'predictor_state_dict': self.rnd.predictor_network.state_dict(),
+            # Optimizer state
+            'optimizer_state_dict': self._optimizer.state_dict(),
+            # Reward normalizer statistics
+            'reward_normalizer_state_dict': self.rnd.reward_normalizer.state_dict(),
+            # Config for validation
+            'config': {
+                'embedding_dim': self.embedding_dim,
+                'normalize_embeddings': self.normalize_embeddings,
+                'concat_before_emb': self.concat_before_emb,
+            }
+        }
+        
+        # Save embedding normalizer if enabled
+        if self.normalize_embeddings and self.rnd.embedding_normalizer is not None:
+            state['embedding_normalizer_state_dict'] = self.rnd.embedding_normalizer.state_dict()
+            state['embedding_stats_frozen'] = self.rnd.embedding_stats_frozen
+        
+        torch.save(state, path)
+        logger.info(f"[SemanticRND] Saved state to {path}")
+
+    def load_state(self, path: str) -> None:
+        """
+        Load SemanticRND state from disk.
+        
+        RESTORES (completely saved checkpoint state):
+        - RND target network weights (frozen random reference)
+        - RND predictor network weights (learnable parameters)
+        - Optimizer state (momentum, moving averages, step counts - ensures smooth training resume)
+        - Reward normalizer running statistics (mean/var for consistent reward normalization)
+        - Embedding normalizer statistics (if enabled)
+        
+        Does NOT restore (auto-recreated on init):
+        - Encoder (frozen, reloaded from HuggingFace)
+        
+        Note: Target network is now restored to ensure exact reproducibility when resuming training.
+        This preserves the exact random initialization across checkpoint loads. For backward
+        compatibility, if target_state_dict is missing from old checkpoints, the target network
+        will keep its current random initialization.
+        
+        Args:
+            path: Path to load the state from (.pt file)
+        
+        Raises:
+            ValueError: If configuration doesn't match saved state
+        """
+        state = torch.load(path, map_location=self.device)
+        
+        # Validate configuration
+        config = state['config']
+        if config['embedding_dim'] != self.embedding_dim:
+            raise ValueError(
+                f"Embedding dimension mismatch! Expected {self.embedding_dim}, "
+                f"got {config['embedding_dim']}"
+            )
+        if config['normalize_embeddings'] != self.normalize_embeddings:
+            raise ValueError(
+                f"normalize_embeddings mismatch! Expected {self.normalize_embeddings}, "
+                f"got {config['normalize_embeddings']}"
+            )
+        
+        # Restore target network (if available, for backward compatibility)
+        if 'target_state_dict' in state:
+            self.rnd.target_network.load_state_dict(state['target_state_dict'])
+            logger.info(f"[SemanticRND] Restored target network from checkpoint")
+        else:
+            logger.warning(
+                f"[SemanticRND] No target_state_dict found in checkpoint (old format). "
+                f"Using current random initialization for target network."
+            )
+        
+        # Restore predictor network
+        self.rnd.predictor_network.load_state_dict(state['predictor_state_dict'])
+        
+        # Restore optimizer state
+        self._optimizer.load_state_dict(state['optimizer_state_dict'])
+        
+        # Restore reward normalizer
+        self.rnd.reward_normalizer.load_state_dict(state['reward_normalizer_state_dict'])
+        
+        # Restore embedding normalizer if present
+        if self.normalize_embeddings and 'embedding_normalizer_state_dict' in state:
+            self.rnd.embedding_normalizer.load_state_dict(state['embedding_normalizer_state_dict'])
+            self.rnd.embedding_stats_frozen = state.get('embedding_stats_frozen', True)
+        
+        logger.info(f"[SemanticRND] Loaded state from {path}")
+
 
 def normalize_rewards_stratified_groupwise(
     rewards: torch.Tensor,
-    correctness: torch.Tensor,
+    # correctness: torch.Tensor,
     group_size: int,
     eps: float = 1e-8
 ) -> torch.Tensor:
@@ -1224,42 +1413,55 @@ def normalize_rewards_stratified_groupwise(
     
     # Reshape to [B, G] for group-wise operations
     rewards_bg = rewards.view(B, G)
-    correct_bg = correctness.view(B, G)
+    # correct_bg = correctness.view(B, G)
     
     # Output tensor
     normalized_bg = torch.zeros_like(rewards_bg)
     
+
+    ## TODO: cleanup/tensorization is pending
     for b in range(B):
         group_rewards = rewards_bg[b]  # [G]
-        group_correct = correct_bg[b]  # [G] bool
+        # group_correct = correct_bg[b]  # [G] bool
         
-        # Normalize correct subset
-        correct_mask = group_correct
-        num_correct = correct_mask.sum().item()
-        if num_correct > 0:
-            correct_rewards = group_rewards[correct_mask]
-            if num_correct > 1:
-                r_min = correct_rewards.min()
-                r_max = correct_rewards.max()
-                normalized = (correct_rewards - r_min) / (r_max - r_min + eps)
-            else:
-                # Single element: assign 0.5 (middle of [0, 1])
-                normalized = torch.tensor([0.5], device=device) #TODO: maybe do 1?
-            normalized_bg[b, correct_mask] = normalized
+        # Normalize entire group together
+        r_min = group_rewards.min()
+        r_max = group_rewards.max()
+        if G > 1:
+            normalized = (group_rewards - r_min) / (r_max - r_min + eps)
+        else:
+            # Single element: assign 0.5 (middle of [0, 1])
+            normalized = torch.tensor([0.5], device=device)
+        normalized_bg[b] = normalized
+
+
+        # # Normalize correct subset
+        # correct_mask = group_correct
+        # num_correct = correct_mask.sum().item()
+        # if num_correct > 0:
+        #     correct_rewards = group_rewards[correct_mask]
+        #     if num_correct > 1:
+        #         r_min = correct_rewards.min()
+        #         r_max = correct_rewards.max()
+        #         normalized = (correct_rewards - r_min) / (r_max - r_min + eps)
+        #     else:
+        #         # Single element: assign 0.5 (middle of [0, 1])
+        #         normalized = torch.tensor([0.5], device=device) #TODO: maybe do 1?
+        #     normalized_bg[b, correct_mask] = normalized
         
-        # Normalize incorrect subset
-        incorrect_mask = ~group_correct
-        num_incorrect = incorrect_mask.sum().item()
-        if num_incorrect > 0:
-            incorrect_rewards = group_rewards[incorrect_mask]
-            if num_incorrect > 1:
-                r_min = incorrect_rewards.min()
-                r_max = incorrect_rewards.max()
-                normalized = (incorrect_rewards - r_min) / (r_max - r_min + eps)
-            else:
-                # Single element: assign 0.5
-                normalized = torch.tensor([0.5], device=device)
-            normalized_bg[b, incorrect_mask] = normalized
+        # # Normalize incorrect subset
+        # incorrect_mask = ~group_correct
+        # num_incorrect = incorrect_mask.sum().item()
+        # if num_incorrect > 0:
+        #     incorrect_rewards = group_rewards[incorrect_mask]
+        #     if num_incorrect > 1:
+        #         r_min = incorrect_rewards.min()
+        #         r_max = incorrect_rewards.max()
+        #         normalized = (incorrect_rewards - r_min) / (r_max - r_min + eps)
+        #     else:
+        #         # Single element: assign 0.5
+        #         normalized = torch.tensor([0.5], device=device)
+        #     normalized_bg[b, incorrect_mask] = normalized
     
     return normalized_bg.view(-1)  # Flatten back to [B*G]
 
@@ -1267,7 +1469,8 @@ def normalize_rewards_stratified_groupwise(
 def apply_signed_curiosity_rewards(
     normalized_rewards: torch.Tensor,
     correctness: torch.Tensor,
-    curiosity_coef: float
+    pos_curiosity_coef: float,
+    neg_curiosity_coef: float
 ) -> torch.Tensor:
     """
     Apply signed curiosity rewards based on correctness.
@@ -1285,8 +1488,8 @@ def apply_signed_curiosity_rewards(
     """
     signed_rewards = torch.where(
         correctness,
-        curiosity_coef * normalized_rewards,    # Positive for correct
-        -curiosity_coef * normalized_rewards    # Negative for incorrect
+        pos_curiosity_coef * normalized_rewards,    # Positive for correct
+        -neg_curiosity_coef * normalized_rewards    # Negative for incorrect
     )
     return signed_rewards
 

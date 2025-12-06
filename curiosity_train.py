@@ -46,7 +46,7 @@ from tinker_cookbook.rl.types import (
     TrajectoryGroup,
 )
 from tinker_cookbook.rl.problem_env import ProblemEnv
-from tinker_cookbook.tokenizer_utils import Tokenizer
+from tinker_cookbook.tokenizer_utils import Tokenizer, get_tokenizer
 from tinker_cookbook.utils import logtree, ml_log
 from tinker_cookbook.utils.misc_utils import safezip, split_list, timed
 from tinker_cookbook.utils.trace import scope, trace_init, get_scope_context
@@ -91,6 +91,184 @@ def log_memory_usage(label: str, include_gpu: bool = True):
     if include_gpu and "gpu_allocated_mb" in mem:
         gpu_str = f", GPU: {mem['gpu_allocated_mb']:.1f}MB alloc / {mem['gpu_reserved_mb']:.1f}MB reserved"
     logger.info(f"[Memory] {label}: CPU RSS={mem['cpu_rss_mb']:.1f}MB, VMS={mem['cpu_vms_mb']:.1f}MB{gpu_str}")
+
+
+# BEGIN RND CHECKPOINTING CODE
+def find_latest_rnd_checkpoint(log_path: str) -> tuple[str, str] | None:
+    """
+    Find the most recent RND checkpoint in the log directory.
+    
+    Searches in this order:
+    1. rnd_latest.pt (new format)
+    2. rnd_checkpoint_*.pt (old format, finds highest batch index)
+    
+    Args:
+        log_path: Directory containing checkpoints
+    
+    Returns:
+        Tuple of (model_path, buffer_path) or None if not found
+    """
+    import glob
+    import re
+    
+    # First try latest checkpoint (new format)
+    latest_model_path = os.path.join(log_path, "rnd_latest.pt")
+    latest_buffer_path = os.path.join(log_path, "rnd_buffer_latest.pt")
+    
+    if os.path.exists(latest_model_path) and os.path.exists(latest_buffer_path):
+        logger.info(f"Found latest RND checkpoint: {latest_model_path}")
+        return (latest_model_path, latest_buffer_path)
+    
+    # Fall back to searching for numbered checkpoints (old format)
+    checkpoint_pattern = os.path.join(log_path, "rnd_checkpoint_*.pt")
+    checkpoint_files = glob.glob(checkpoint_pattern)
+    
+    if not checkpoint_files:
+        logger.info(f"No RND checkpoints found in {log_path}")
+        return None
+    
+    # Extract batch indices and find the maximum
+    batch_indices = []
+    for filepath in checkpoint_files:
+        match = re.search(r'rnd_checkpoint_(\d{6})\.pt$', filepath)
+        if match:
+            batch_idx = int(match.group(1))
+            buffer_path = os.path.join(log_path, f"rnd_buffer_{batch_idx:06d}.pt")
+            if os.path.exists(buffer_path):
+                batch_indices.append((batch_idx, filepath, buffer_path))
+            else:
+                # Try old format without underscore
+                buffer_path_old = os.path.join(log_path, f"rndbuffer_{batch_idx:06d}.pt")
+                if os.path.exists(buffer_path_old):
+                    batch_indices.append((batch_idx, filepath, buffer_path_old))
+    
+    if not batch_indices:
+        logger.warning(f"Found RND checkpoint files but couldn't find matching buffers")
+        return None
+    
+    # Sort by batch index and get the latest
+    batch_indices.sort(reverse=True)
+    latest_batch_idx, latest_model_path, latest_buffer_path = batch_indices[0]
+    
+    logger.info(f"Found RND checkpoint from step {latest_batch_idx}: {latest_model_path}")
+    return (latest_model_path, latest_buffer_path)
+
+
+def save_rnd_checkpoint(
+    novelty_model: SemanticRND | None,
+    rnd_buffer: RNDBuffer | None,
+    log_path: str,
+    batch_idx: int,
+    save_every: int,
+    start_batch: int = 0,
+) -> dict[str, str]:
+    """
+    Save RND checkpoint to 'rnd_latest.pt' (always) and permanent checkpoint every save_every steps.
+    
+    Args:
+        novelty_model: SemanticRND model to save (or None if disabled)
+        rnd_buffer: RNDBuffer to save (or None if disabled)
+        log_path: Directory to save checkpoints
+        batch_idx: Current batch index
+        save_every: Save permanent checkpoint every N steps
+        start_batch: Starting batch index (skip saving before this)
+    
+    Returns:
+        Dictionary with paths to saved files
+    """
+    if novelty_model is None or rnd_buffer is None:
+        return {}
+    
+    # Always save to latest checkpoint
+    latest_model_path = os.path.join(log_path, "rnd_latest.pt")
+    latest_buffer_path = os.path.join(log_path, "rnd_buffer_latest.pt")
+    
+    # Save permanent checkpoint every save_every steps (after start_batch)
+    save_permanent = (batch_idx > start_batch and batch_idx % save_every == 0)
+    permanent_model_path = os.path.join(log_path, f"rnd_checkpoint_{batch_idx:06d}.pt") if save_permanent else None
+    permanent_buffer_path = os.path.join(log_path, f"rnd_buffer_{batch_idx:06d}.pt") if save_permanent else None
+    
+    try:
+        # Save latest RND state
+        novelty_model.save_state(latest_model_path)
+        rnd_buffer.save_state(latest_buffer_path)
+        
+        result = {
+            "latest_model": latest_model_path,
+            "latest_buffer": latest_buffer_path,
+        }
+        
+        # Save permanent checkpoint if needed
+        if save_permanent:
+            assert permanent_model_path is not None and permanent_buffer_path is not None
+            novelty_model.save_state(permanent_model_path)
+            rnd_buffer.save_state(permanent_buffer_path)
+            result["permanent_model"] = permanent_model_path
+            result["permanent_buffer"] = permanent_buffer_path
+            logger.info(f"Saved permanent RND checkpoint at batch {batch_idx}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to save RND checkpoint: {e}")
+        return {}
+
+
+def load_rnd_checkpoint(
+    novelty_model: SemanticRND | None,
+    rnd_buffer: RNDBuffer | None,
+    log_path: str,
+    batch_idx: int | None = None,
+) -> bool:
+    """
+    Load RND checkpoint. Searches for latest checkpoint automatically if batch_idx not provided.
+    
+    Args:
+        novelty_model: SemanticRND model to load into (or None if disabled)
+        rnd_buffer: RNDBuffer to load into (or None if disabled)
+        log_path: Directory containing checkpoints
+        batch_idx: Optional specific batch index to load (auto-searches if None)
+    
+    Returns:
+        bool: True if checkpoint was loaded, False if not found
+    """
+    if novelty_model is None or rnd_buffer is None:
+        return False
+    
+    # If specific batch index requested, try that first
+    if batch_idx is not None:
+        model_path = os.path.join(log_path, f"rnd_checkpoint_{batch_idx:06d}.pt")
+        buffer_path = os.path.join(log_path, f"rnd_buffer_{batch_idx:06d}.pt")
+        
+        if os.path.exists(model_path) and os.path.exists(buffer_path):
+            try:
+                novelty_model.load_state(model_path)
+                rnd_buffer.load_state(buffer_path)
+                logger.info(f"Loaded RND checkpoint from step {batch_idx}: {model_path}")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to load RND checkpoint from step {batch_idx}: {e}")
+    
+    # Auto-search for latest checkpoint
+    checkpoint_info = find_latest_rnd_checkpoint(log_path)
+    
+    if checkpoint_info is None:
+        logger.warning("No RND checkpoint found to load")
+        return False
+    
+    model_path, buffer_path = checkpoint_info
+    
+    try:
+        novelty_model.load_state(model_path)
+        rnd_buffer.load_state(buffer_path)
+        logger.info(f"Loaded RND checkpoint: {model_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to load RND checkpoint: {e}")
+        return False
+
+
+# END RND CHECKPOINTING CODE
 
 
 # BEGIN ADDED CODE
@@ -453,6 +631,7 @@ class Config:
     num_substeps: int = 1
 
     wandb_project: str | None = None
+    wandb_entity: str | None = None
     wandb_name: str | None = None
 
     log_path: str = chz.field(munger=lambda _, s: os.path.expanduser(s))
@@ -460,8 +639,8 @@ class Config:
     enable_trace: bool = False
 
     remove_constant_reward_groups: bool = False
-    eval_every: int = 20
-    save_every: int = 20
+    eval_every: int = 5
+    save_every: int = 5
     load_checkpoint_path: str | None = None
 
     async_config: AsyncConfig | None = None
@@ -474,18 +653,28 @@ class Config:
     # Reasoning reward configuration
     use_reasoning_rewards: bool = False  # Whether to use LLM-as-judge for reasoning rewards
     reasoning_reward_coef: float = 0.5  # Weight for reasoning rewards vs correctness (0.5 = equal weight)
+    target_layers: Tuple[int, ...] = (128, 8)  # Target network architecture
+    predictor_layers: Tuple[int, ...] = (256, 8)  # Predictor network architecture
     
     # RND Buffer-based training configuration
     use_rnd_curiosity: bool = True  # Whether to use RND-based curiosity rewards
     rnd_buffer_size_multiplier: int = 5  # S = buffer holds S batches of rollouts
     rnd_update_steps: int = 50  # K = number of RND gradient updates per LLM batch
     rnd_minibatch_size: int = 2048  # N = samples per RND update (default = B*G)
-    curiosity_reward_coef: float = 0.1  # Coefficient for curiosity rewards
+    curiosity_reward_coef: float|Tuple[float, float] = 0.1  # Coefficient for curiosity rewards
     rnd_learning_rate: float = 1e-4  # Learning rate for RND predictor
     group_size: int = 16  # G = number of rollouts per problem
     penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
     correctness_threshold: float = 0.5  # Threshold for determining correctness (reward >= threshold)
     curiosity_warmup_batches: int = 0  # Number of batches before curiosity rewards are added (RND still trains during warmup)
+    
+    # Dataset scheduling: controls which datasets to use during warmup vs post-warmup
+    # Format: "{warmup_dataset}-{main_dataset}"
+    # Options: "e" (easy/math), "h" (hard/deepmath), "m" (mixed)
+    # Examples: "e-h" (easy warmup, hard main), "m-h" (mixed warmup, hard main),
+    #           "e-m" (easy warmup, mixed main), "m-m" (mixed throughout)
+    dataset_schedule: Literal["e-h", "m-h", "e-m", "m-m"] = "m-m"
+    warmup_dataset_builder: RLDatasetBuilder | None = None  # Optional separate dataset for warmup phase
     # END SEMANTIC_RND CODE
 
 
@@ -986,17 +1175,61 @@ async def save_checkpoint_and_get_sampling_client(
     log_path: str,
     save_every: int,
     start_batch: int = 0,
+    novelty_model: SemanticRND | None = None,
+    rnd_buffer: RNDBuffer | None = None,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+    """
+    Save checkpoint to 'latest_checkpoint.pt' (always) and permanent checkpoint every save_every steps.
+    Also saves RND state if provided.
+    
+    Args:
+        training_client: The training client to checkpoint
+        i_batch: Current batch index
+        log_path: Directory to save checkpoints
+        save_every: Save permanent checkpoint every N steps
+        start_batch: Starting batch index (skip permanent saves before this)
+        novelty_model: Optional RND model to checkpoint
+        rnd_buffer: Optional RND buffer to checkpoint
+    
+    Returns:
+        Tuple of (sampling_client, metrics)
+    """
     metrics = {}
     with timed("save_checkpoint", metrics):
-        path_dict = await checkpoint_utils.save_checkpoint_async(
+        # Determine if we should save a permanent checkpoint
+        save_permanent = (i_batch > start_batch and i_batch % save_every == 0)
+        
+        # Always save latest checkpoint
+        latest_path_dict = await checkpoint_utils.save_checkpoint_async(
             training_client=training_client,
-            name=f"{i_batch:06d}",
+            name="latest_checkpoint",
             log_path=log_path,
             loop_state={"batch": i_batch},
-            kind="both" if (i_batch > start_batch and i_batch % save_every == 0) else "sampler",
+            kind="both",
         )
-        return training_client.create_sampling_client(path_dict["sampler_path"]), metrics
+        
+        # Save permanent checkpoint every save_every steps
+        if save_permanent:
+            await checkpoint_utils.save_checkpoint_async(
+                training_client=training_client,
+                name=f"{i_batch:06d}",
+                log_path=log_path,
+                loop_state={"batch": i_batch},
+                kind="both",
+            )
+            logger.info(f"Saved permanent LLM checkpoint at batch {i_batch}")
+        
+        # Save RND checkpoint (handles latest + permanent internally)
+        rnd_paths = save_rnd_checkpoint(
+            novelty_model=novelty_model,
+            rnd_buffer=rnd_buffer,
+            log_path=log_path,
+            batch_idx=i_batch,
+            save_every=save_every,
+            start_batch=start_batch,
+        )
+        
+        return training_client.create_sampling_client(latest_path_dict["sampler_path"]), metrics
 
 
 # BEGIN ADDED CODE
@@ -1117,11 +1350,11 @@ async def prepare_minibatch(
             if num_correct_answers > 0:
                 logger.info(f"Calling GeminiJudge on {num_correct_answers}/{total_trajectories} correct trajectories (skipping {num_skipped} incorrect)...")
                 
-                judge_results: list[JudgeResult] = gemini_judge.judge_batch(
+                judge_results: list[JudgeResult] = gemini_judge.judge_synchronous(
                     questions=filtered_questions,
                     answers=filtered_answers,
                     references=filtered_references,
-                    filename_fingerprint=f"batch_{i_batch:06d}_{num_correct_answers}",
+                    # filename_fingerprint=f"batch_{i_batch:06d}_{num_correct_answers}",
                     retry_on_error=False,
                 )
                 
@@ -1281,6 +1514,8 @@ async def prepare_minibatch(
             metrics["rnd/intrinsic_reward_std"] = float(np.std(raw_intrinsic))
             metrics["rnd/intrinsic_reward_min"] = float(np.min(raw_intrinsic))
             metrics["rnd/intrinsic_reward_max"] = float(np.max(raw_intrinsic))
+            metrics["rnd/intrinsic_reward_p75"] = float(np.percentile(raw_intrinsic, 75))
+            metrics["rnd/intrinsic_reward_p25"] = float(np.percentile(raw_intrinsic, 25))
             
             if correct_mask.sum() > 0:
                 metrics["rnd/correct_reward_mean"] = float(np.mean(raw_intrinsic[correct_mask]))
@@ -1317,6 +1552,10 @@ async def prepare_minibatch(
                 metrics["rnd/loss_mean"] = float(np.mean(rnd_losses))
                 metrics["rnd/loss_std"] = float(np.std(rnd_losses))
                 metrics["rnd/num_updates"] = rnd_update_steps
+                metrics["rnd/loss_max"] = float(np.max(rnd_losses))
+                metrics["rnd/loss_min"] = float(np.min(rnd_losses))
+                metrics["rnd/loss_p75"] = float(np.percentile(rnd_losses, 75))
+                metrics["rnd/loss_p25"] = float(np.percentile(rnd_losses, 25))
                 
                 logger.info(
                     f"RND buffer training: {rnd_update_steps} updates, "
@@ -1362,6 +1601,8 @@ async def compute_full_batch_metrics_and_get_sampling_client(
     log_path: str,
     save_every: int,
     do_compute_post_kl: bool,
+    novelty_model: SemanticRND | None = None,
+    rnd_buffer: RNDBuffer | None = None,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
     """
     At the end of the iteration, this will compute metrics for the full batch
@@ -1379,7 +1620,9 @@ async def compute_full_batch_metrics_and_get_sampling_client(
 
     # Get a sampling client using the new weights
     sampling_client, checkpoint_metrics = await save_checkpoint_and_get_sampling_client(
-        training_client, i_batch, log_path, save_every
+        training_client, i_batch, log_path, save_every,
+        novelty_model=novelty_model,
+        rnd_buffer=rnd_buffer,
     )
     metrics.update(checkpoint_metrics)
 
@@ -1526,6 +1769,8 @@ async def do_train_step_streaming_and_get_sampling_client(
         cfg.log_path,
         cfg.save_every,
         cfg.compute_post_kl,
+        novelty_model=novelty_model,
+        rnd_buffer=rnd_buffer,
     )
     metrics.update(full_batch_metrics)
     return sampling_client, metrics
@@ -1623,6 +1868,8 @@ async def do_train_step_and_get_sampling_client(
         cfg.log_path,
         cfg.save_every,
         cfg.compute_post_kl,
+        novelty_model=novelty_model,
+        rnd_buffer=rnd_buffer,
     )
     metrics.update(full_batch_metrics)
 
@@ -1679,7 +1926,8 @@ async def do_sync_training(
 # END SEMANTIC_RND CODE
     # Initial sampling client
     sampling_client, _ = await save_checkpoint_and_get_sampling_client(
-        training_client, start_batch, cfg.log_path, cfg.save_every, start_batch
+        training_client, start_batch, cfg.log_path, cfg.save_every, start_batch,
+        novelty_model=novelty_model, rnd_buffer=rnd_buffer,
     )
 
     for i_batch in range(start_batch, end_batch):
@@ -1785,6 +2033,7 @@ async def main(
     ml_logger = ml_log.setup_logging(
         log_dir=cfg.log_path,
         wandb_project=cfg.wandb_project,
+        wandb_entity=cfg.wandb_entity,
         config=cfg,
         wandb_name=cfg.wandb_name,
     )
@@ -1803,11 +2052,15 @@ async def main(
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("pylatexenc").setLevel(logging.WARNING)
 
+    # Get last checkpoint from checkpoints.jsonl (managed by checkpoint_utils)
     resume_info = checkpoint_utils.get_last_checkpoint(cfg.log_path)
+    start_batch = 0
+    
     if resume_info:
         start_batch = resume_info["batch"]
+        logger.info(f"Resuming from batch {start_batch} (checkpoint: {resume_info.get('name', 'unknown')})")
     else:
-        start_batch = 0
+        logger.info("Starting training from scratch (no checkpoint found)")
     
     # BEGIN SEMANTIC_RND CODE
     # --- RND Initialization ---
@@ -1823,8 +2076,8 @@ async def main(
         # This mode stores problem and response embeddings separately for efficiency
         novelty_model = SemanticRND(
             encoder_model_name="Alibaba-NLP/gte-modernbert-base",
-            target_layers=(128, 8),  # Target network architecture
-            predictor_layers=(256, 8),  # Predictor network architecture
+            target_layers=cfg.target_layers,  # Target network architecture
+            predictor_layers=cfg.predictor_layers,  # Predictor network architecture
             device=str(device),
             max_length=8192,
             concat_before_emb=False,  # Required for buffer-based training
@@ -1871,16 +2124,26 @@ async def main(
         _ = await future.result_async()
         logger.info(f"Loaded state from {load_state_path}")
 
-    # Get tokenizer from training client
-    tokenizer = training_client.get_tokenizer()
+    # Get tokenizer - use local get_tokenizer to avoid baseten tokenizer issue
+    tokenizer = get_tokenizer(cfg.model_name)
 
-    # Create dataset from thunk
-    # The dataset_builder returns (train_dataset, test_datasets) where test_datasets
-    # can be:
-    #   - None (no test dataset)
-    #   - A single RLDataset (backward compatible)
-    #   - A list of RLDatasets (for mixed training with multiple test sets)
-    dataset, maybe_test_datasets = await cfg.dataset_builder()
+    # BEGIN SEMANTIC_RND CODE
+    # Determine which dataset to use based on dataset_schedule and current phase
+    warmup_batches = cfg.curiosity_warmup_batches
+    in_warmup = start_batch < warmup_batches
+    
+    warmup_type, main_type = cfg.dataset_schedule.split('-')
+    current_type = warmup_type if in_warmup else main_type
+    logger.info(f"Dataset schedule '{cfg.dataset_schedule}': warmup={warmup_type}, main={main_type}")
+    logger.info(f"Current phase: {'WARMUP' if in_warmup else 'MAIN'} (batch {start_batch}), using '{current_type}' dataset")
+    
+    # Use warmup dataset if in warmup phase, otherwise use main dataset
+    if warmup_batches > 0 and in_warmup and cfg.warmup_dataset_builder is not None:
+        dataset, maybe_test_datasets = await cfg.warmup_dataset_builder()
+    else:
+        dataset, maybe_test_datasets = await cfg.dataset_builder()
+    # END SEMANTIC_RND CODE
+    
     evaluators = [evaluator() for evaluator in cfg.evaluator_builders]
     
     # Handle test datasets - can be None, single dataset, or list of datasets
@@ -1926,6 +2189,19 @@ async def main(
             f"batch_size={batch_size}, group_size={group_size}, "
             f"capacity={cfg.rnd_buffer_size_multiplier * batch_size * group_size} responses"
         )
+        
+        # Load RND state if resuming from checkpoint
+        if resume_info:
+            rnd_loaded = load_rnd_checkpoint(
+                novelty_model=novelty_model,
+                rnd_buffer=rnd_buffer,
+                log_path=cfg.log_path,
+                batch_idx=None,  # Auto-search for latest checkpoint
+            )
+            if rnd_loaded:
+                logger.info("Restored RND state from checkpoint")
+            else:
+                logger.warning("No RND checkpoint found, starting fresh")
     # END SEMANTIC_RND CODE
 
     # BEGIN ADDED CODE
@@ -1936,33 +2212,111 @@ async def main(
     # Log memory usage before starting training loop
     log_memory_usage("Before training loop START")
     
-    # Training loop
+    # Determine training function
     if cfg.async_config is not None:
         training_func = do_async_training
     elif cfg.stream_minibatch_config is not None:
         training_func = do_sync_training_with_stream_minibatch
     else:
         training_func = do_sync_training
-    await training_func(
-        start_batch=start_batch,
-        end_batch=num_batches,
-        num_batches=num_batches,
-        cfg=cfg,
-        training_client=training_client,
-        service_client=service_client,
-        evaluators=evaluators,
-        dataset=dataset,
-        ml_logger=ml_logger,
-        tokenizer=tokenizer,
-        novelty_model=novelty_model,
-        intrinsic_reward_coef=intrinsic_reward_coef,
-        gemini_judge=gemini_judge,
-        reasoning_reward_coef=cfg.reasoning_reward_coef,
-        rnd_buffer=rnd_buffer,
-        rnd_update_steps=cfg.rnd_update_steps,
-        penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
-        correctness_threshold=cfg.correctness_threshold,
+    
+    # Check if we need to switch datasets mid-training
+    # Only switch if warmup and main datasets are different
+    warmup_type, main_type = cfg.dataset_schedule.split('-')
+    needs_dataset_switch = (
+        warmup_batches > 0 and 
+        start_batch < warmup_batches and
+        cfg.warmup_dataset_builder is not None and
+        warmup_type != main_type  # Only switch if datasets differ
     )
+    
+    if needs_dataset_switch:
+        warmup_type, main_type = cfg.dataset_schedule.split('-')
+        
+        # Train warmup phase
+        logger.info(f"Starting warmup phase (batches {start_batch}-{warmup_batches-1}) with '{warmup_type}' dataset")
+        await training_func(
+            start_batch=start_batch,
+            end_batch=warmup_batches,
+            num_batches=warmup_batches,
+            cfg=cfg,
+            training_client=training_client,
+            service_client=service_client,
+            evaluators=evaluators,
+            dataset=dataset,
+            ml_logger=ml_logger,
+            tokenizer=tokenizer,
+            novelty_model=novelty_model,
+            intrinsic_reward_coef=intrinsic_reward_coef,
+            gemini_judge=gemini_judge,
+            reasoning_reward_coef=cfg.reasoning_reward_coef,
+            rnd_buffer=rnd_buffer,
+            rnd_update_steps=cfg.rnd_update_steps,
+            penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
+            correctness_threshold=cfg.correctness_threshold,
+        )
+        
+        # Switch to main dataset
+        logger.info(f"Warmup complete. Switching to main phase (batches {warmup_batches}-end) with '{main_type}' dataset")
+        dataset, maybe_test_datasets = await cfg.dataset_builder()
+        num_batches = len(dataset)
+        
+        # Update evaluators for main phase
+        num_custom_evaluators = len(cfg.evaluator_builders)
+        evaluators = evaluators[:num_custom_evaluators]
+        
+        if maybe_test_datasets is not None:
+            if isinstance(maybe_test_datasets, list):
+                test_dataset_names = ["math_test", "deepmath_test"]
+                for i, test_ds in enumerate(maybe_test_datasets):
+                    name = test_dataset_names[i] if i < len(test_dataset_names) else f"test_{i}"
+                    evaluators.append(RLTestSetEvaluator(test_ds, max_tokens=cfg.max_tokens, name=name))
+            else:
+                evaluators.append(RLTestSetEvaluator(maybe_test_datasets, max_tokens=cfg.max_tokens))
+        
+        # Continue with main phase
+        await training_func(
+            start_batch=warmup_batches,
+            end_batch=num_batches,
+            num_batches=num_batches,
+            cfg=cfg,
+            training_client=training_client,
+            service_client=service_client,
+            evaluators=evaluators,
+            dataset=dataset,
+            ml_logger=ml_logger,
+            tokenizer=tokenizer,
+            novelty_model=novelty_model,
+            intrinsic_reward_coef=intrinsic_reward_coef,
+            gemini_judge=gemini_judge,
+            reasoning_reward_coef=cfg.reasoning_reward_coef,
+            rnd_buffer=rnd_buffer,
+            rnd_update_steps=cfg.rnd_update_steps,
+            penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
+            correctness_threshold=cfg.correctness_threshold,
+        )
+    else:
+        # No dataset switch needed - train normally
+        await training_func(
+            start_batch=start_batch,
+            end_batch=num_batches,
+            num_batches=num_batches,
+            cfg=cfg,
+            training_client=training_client,
+            service_client=service_client,
+            evaluators=evaluators,
+            dataset=dataset,
+            ml_logger=ml_logger,
+            tokenizer=tokenizer,
+            novelty_model=novelty_model,
+            intrinsic_reward_coef=intrinsic_reward_coef,
+            gemini_judge=gemini_judge,
+            reasoning_reward_coef=cfg.reasoning_reward_coef,
+            rnd_buffer=rnd_buffer,
+            rnd_update_steps=cfg.rnd_update_steps,
+            penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
+            correctness_threshold=cfg.correctness_threshold,
+        )
     # END SEMANTIC_RND CODE
     # END ADDED CODE
 

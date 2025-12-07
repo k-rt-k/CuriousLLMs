@@ -2134,8 +2134,15 @@ async def main(
     
     warmup_type, main_type = cfg.dataset_schedule.split('-')
     current_type = warmup_type if in_warmup else main_type
-    logger.info(f"Dataset schedule '{cfg.dataset_schedule}': warmup={warmup_type}, main={main_type}")
-    logger.info(f"Current phase: {'WARMUP' if in_warmup else 'MAIN'} (batch {start_batch}), using '{current_type}' dataset")
+    
+    # Map schedule codes to dataset names for logging
+    schedule_name_map = {"e": "math", "h": "deepmath", "m": "mixed"}
+    warmup_name = schedule_name_map[warmup_type]
+    main_name = schedule_name_map[main_type]
+    current_name = schedule_name_map[current_type]
+    
+    logger.info(f"Dataset schedule '{cfg.dataset_schedule}': warmup={warmup_name}, main={main_name}")
+    logger.info(f"Current phase: {'WARMUP' if in_warmup else 'MAIN'} (batch {start_batch}), using '{current_name}' dataset")
     
     # Use warmup dataset if in warmup phase, otherwise use main dataset
     if warmup_batches > 0 and in_warmup and cfg.warmup_dataset_builder is not None:
@@ -2232,9 +2239,12 @@ async def main(
     
     if needs_dataset_switch:
         warmup_type, main_type = cfg.dataset_schedule.split('-')
+        schedule_name_map = {"e": "math", "h": "deepmath", "m": "mixed"}
+        warmup_name = schedule_name_map[warmup_type]
+        main_name = schedule_name_map[main_type]
         
         # Train warmup phase
-        logger.info(f"Starting warmup phase (batches {start_batch}-{warmup_batches-1}) with '{warmup_type}' dataset")
+        logger.info(f"Starting warmup phase (batches {start_batch}-{warmup_batches-1}) with '{warmup_name}' dataset")
         await training_func(
             start_batch=start_batch,
             end_batch=warmup_batches,
@@ -2257,7 +2267,7 @@ async def main(
         )
         
         # Switch to main dataset
-        logger.info(f"Warmup complete. Switching to main phase (batches {warmup_batches}-end) with '{main_type}' dataset")
+        logger.info(f"Warmup complete. Switching to main phase (batches {warmup_batches}-end) with '{main_name}' dataset")
         dataset, maybe_test_datasets = await cfg.dataset_builder()
         num_batches = len(dataset)
         

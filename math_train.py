@@ -84,8 +84,8 @@ class CLIConfig:
     # END SEMANTIC_RND CODE
 
     # Mixed dataset configuration (only used when env="mixed")
-    math_train_size: int | None = 6000  # None = use all ~12000 Math samples
-    deepmath_train_size: int = 6000
+    math_train_size: int | None = 8000  # None = use all ~12000 Math samples
+    deepmath_train_size: int = 8000
     deepmath_test_size: int = 500
     deepmath_seed: int = 42
     

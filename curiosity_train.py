@@ -923,7 +923,7 @@ async def do_async_training(
     # Initial sampling client to use
     path_dict = await checkpoint_utils.save_checkpoint_async(
         training_client=training_client,
-        name=f"{start_batch:06d}",
+        name=f"step_{start_batch:06d}",
         log_path=cfg.log_path,
         loop_state={"batch": start_batch},
         kind="both",
@@ -1199,24 +1199,16 @@ async def save_checkpoint_and_get_sampling_client(
         # Determine if we should save a permanent checkpoint
         save_permanent = (i_batch > start_batch and i_batch % save_every == 0)
         
-        # Always save latest checkpoint
+        # Always save checkpoint with step number (tinker requires unique names)
         latest_path_dict = await checkpoint_utils.save_checkpoint_async(
             training_client=training_client,
-            name="latest_checkpoint",
+            name=f"step_{i_batch:06d}",
             log_path=log_path,
             loop_state={"batch": i_batch},
             kind="both",
         )
         
-        # Save permanent checkpoint every save_every steps
         if save_permanent:
-            await checkpoint_utils.save_checkpoint_async(
-                training_client=training_client,
-                name=f"{i_batch:06d}",
-                log_path=log_path,
-                loop_state={"batch": i_batch},
-                kind="both",
-            )
             logger.info(f"Saved permanent LLM checkpoint at batch {i_batch}")
         
         # Save RND checkpoint (handles latest + permanent internally)
@@ -2334,7 +2326,7 @@ async def main(
     if start_batch < num_batches:
         _ = await checkpoint_utils.save_checkpoint_async(
             training_client=training_client,
-            name="final",
+            name="step_final",
             log_path=cfg.log_path,
             kind="both",
             loop_state={"batch": num_batches},

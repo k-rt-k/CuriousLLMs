@@ -236,6 +236,65 @@ def _compute_by_group_metrics(
     }
 
 
+def _compute_pass_at_k_metrics(
+    trajectory_groups: list[TrajectoryGroup], good_thresh: float = 0.5
+) -> dict[str, float]:
+    """
+    Compute Pass@k metrics for k in [1, 2, 4, 8, 16].
+    
+    For a problem with K rollouts (group_size):
+    - Pass@k = For each problem, divide K rollouts into (K/k) subgroups of size k,
+               check if each subgroup has at least one correct answer,
+               average the success rate across subgroups, then average across problems.
+    
+    Example with K=8 rollouts per problem:
+    - Pass@1: Each rollout is its own subgroup. Fraction correct = mean of individual correctness.
+    - Pass@2: 4 subgroups of 2 rollouts each. For each subgroup, success if ≥1 correct.
+    - Pass@4: 2 subgroups of 4 rollouts each. For each subgroup, success if ≥1 correct.
+    - Pass@8: 1 subgroup of 8 rollouts. Success if ≥1 correct (same as 1 - frac_all_bad).
+    
+    Returns:
+        Dictionary with keys "pass@1", "pass@2", "pass@4", "pass@8", "pass@16" (only for valid k values).
+    """
+    if not trajectory_groups:
+        return {}
+    
+    # Determine group size from first group (assume all groups have same size)
+    group_size = len(trajectory_groups[0].trajectories_G)
+    if group_size == 0:
+        return {}
+    
+    # k values to compute (only those that divide group_size evenly)
+    k_values = [k for k in [1, 2, 4, 8, 16] if k <= group_size and group_size % k == 0]
+    
+    metrics: dict[str, float] = {}
+    
+    for k in k_values:
+        n_subgroups = group_size // k
+        problem_pass_rates: list[float] = []
+        
+        for tg in trajectory_groups:
+            rewards = tg.get_total_rewards()
+            # Convert rewards to binary correctness
+            correct = [1.0 if r >= good_thresh else 0.0 for r in rewards]
+            
+            # Divide into n_subgroups of size k
+            subgroup_successes = 0
+            for i in range(n_subgroups):
+                subgroup = correct[i * k : (i + 1) * k]
+                # Success if at least one in subgroup is correct
+                if any(c >= 0.5 for c in subgroup):
+                    subgroup_successes += 1
+            
+            # Pass rate for this problem = fraction of successful subgroups
+            problem_pass_rates.append(subgroup_successes / n_subgroups)
+        
+        # Average across all problems
+        metrics[f"pass@{k}"] = np.mean(problem_pass_rates).item()
+    
+    return metrics
+
+
 def _compute_trajectory_metrics(trajectory_groups: list[TrajectoryGroup]) -> dict[str, float]:
     """
     Compute comprehensive metrics from trajectory groups.
@@ -300,6 +359,9 @@ def _compute_trajectory_metrics(trajectory_groups: list[TrajectoryGroup]) -> dic
 
     # By-group metrics
     metrics.update(_compute_by_group_metrics(trajectory_groups))
+
+    # Pass@k metrics
+    metrics.update(_compute_pass_at_k_metrics(trajectory_groups))
 
     return metrics
 
@@ -761,12 +823,12 @@ class EvalConfig:
 
     # model_path: str | None = "tinker://a95b9543-d0b1-46c7-a5ab-7baa62d92906/sampler_weights/final"
     model_path: str | None = None
-    model_name: str = "Qwen/Qwen3-30B-A3B"
-    # model_name: str = "openai/gpt-oss-20b"
-    renderer_name: str = "qwen3"
-    # renderer_name: str = "gpt_oss_no_sysprompt"
+    # model_name: str = "Qwen/Qwen3-30B-A3B"
+    model_name: str = "openai/gpt-oss-20b"
+    # renderer_name: str = "qwen3"
+    renderer_name: str = "gpt_oss_no_sysprompt"
     max_tokens: int = 2500
-    group_size: int = 2
+    group_size: int = 16
     log_path: str | None = None
     save_detailed_results: bool = True
     num_groups_to_log: int = 4

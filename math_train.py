@@ -79,6 +79,7 @@ class CLIConfig:
     penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
     correctness_threshold: float = 0.6  # Threshold for determining correctness (reward >= threshold)
     curiosity_warmup_batches: int = 20  # Number of batches before curiosity rewards are added (RND still trains during warmup)
+    entropy_bonus_coef: float | None = None 
     target_layers: Tuple[int, ...] = (128, 8)  # Target network architecture
     predictor_layers: Tuple[int, ...] = (256, 8)  # Predictor network architecture
     # END SEMANTIC_RND CODE
@@ -246,6 +247,7 @@ async def cli_main(cli_config: CLIConfig):
         penalize_incorrect_novelty=cli_config.penalize_incorrect_novelty,
         correctness_threshold=cli_config.correctness_threshold,
         curiosity_warmup_batches=cli_config.curiosity_warmup_batches,
+        entropy_bonus_coef=cli_config.entropy_bonus_coef,
         target_layers=cli_config.target_layers,
         predictor_layers=cli_config.predictor_layers,
         dataset_schedule=cli_config.dataset_schedule,

@@ -667,6 +667,7 @@ class Config:
     penalize_incorrect_novelty: bool = True  # Whether to apply negative reward for incorrect novel responses
     correctness_threshold: float = 0.5  # Threshold for determining correctness (reward >= threshold)
     curiosity_warmup_batches: int = 0  # Number of batches before curiosity rewards are added (RND still trains during warmup)
+    entropy_bonus_coef: float | None = None  # Coefficient for entropy/perplexity bonus reward (None = disabled)
     
     # Dataset scheduling: controls which datasets to use during warmup vs post-warmup
     # Format: "{warmup_dataset}-{main_dataset}"
@@ -1226,6 +1227,50 @@ async def save_checkpoint_and_get_sampling_client(
 
 # BEGIN ADDED CODE
 # BEGIN SEMANTIC_RND CODE
+
+def compute_entropy_bonus(trajectory_groups_P: list[TrajectoryGroup]) -> list[list[float]]:
+    """
+    Compute per-token entropy/perplexity bonus for each trajectory in each group.
+    
+    The entropy bonus is: -sum(log_probs) / num_tokens
+    This encourages the model to generate diverse, uncertain responses.
+    
+    Args:
+        trajectory_groups_P: List of trajectory groups
+        
+    Returns:
+        List of lists, where each inner list contains entropy bonuses for trajectories in that group
+    """
+    entropy_bonuses_P = []
+    
+    for traj_group in trajectory_groups_P:
+        entropy_bonuses_G = []
+        
+        for trajectory in traj_group.trajectories_G:
+            # Sum log probabilities across all tokens in all transitions
+            total_log_prob = 0.0
+            num_tokens = 0
+            
+            for transition in trajectory.transitions:
+                # transition.ac is TokensWithLogprobs
+                if transition.ac.maybe_logprobs is not None:
+                    total_log_prob += sum(transition.ac.maybe_logprobs)
+                    num_tokens += len(transition.ac.maybe_logprobs)
+            
+            # Entropy bonus is negative average log probability
+            # (higher entropy = lower log prob = more uncertain responses)
+            if num_tokens > 0:
+                entropy_bonus = -total_log_prob / num_tokens
+            else:
+                entropy_bonus = 0.0
+            
+            entropy_bonuses_G.append(entropy_bonus)
+        
+        entropy_bonuses_P.append(entropy_bonuses_G)
+    
+    return entropy_bonuses_P
+
+
 @scope
 async def prepare_minibatch(
     env_group_builders_P: Sequence[EnvGroupBuilder],
@@ -1246,6 +1291,7 @@ async def prepare_minibatch(
     correctness_threshold: float = 0.5,
     rnd_minibatch_size: int = 1024,
     curiosity_warmup_batches: int = 0,
+    entropy_bonus_coef: float | None = None,
 ) -> tuple[list[tinker.Datum], dict[str, Any]]:
     """
     Converts the trajectories into a minibatch, and provides metrics about the minibatch.
@@ -1453,6 +1499,20 @@ async def prepare_minibatch(
                 extrinsic_rewards_BG.extend(traj_group.get_total_rewards())
             extrinsic_rewards_BG = torch.tensor(extrinsic_rewards_BG, device=novelty_model.device)
             
+            if entropy_bonus_coef is not None and entropy_bonus_coef > 0.0:
+                # Compute entropy bonuses and add to extrinsic rewards
+                entropy_bonuses_P = compute_entropy_bonus(trajectory_groups_P)
+                entropy_bonuses_BG = []
+                for bonuses_G in entropy_bonuses_P:
+                    entropy_bonuses_BG.extend(bonuses_G)
+                entropy_bonuses_BG = torch.tensor(entropy_bonuses_BG, device=novelty_model.device)
+                
+                # Scale and add entropy bonuses
+                extrinsic_rewards_BG += entropy_bonus_coef * entropy_bonuses_BG
+                
+                metrics["entropy/bonus_mean"] = float(torch.mean(entropy_bonuses_BG).item())
+                metrics["entropy/bonus_std"] = float(torch.std(entropy_bonuses_BG).item())
+
             # Encode problems and responses separately
             problem_embeddings_B, response_embeddings_BG = novelty_model.encode_problems_responses_separately(
                 problems_B, responses_BG
@@ -1716,6 +1776,7 @@ async def do_train_step_streaming_and_get_sampling_client(
                 correctness_threshold=correctness_threshold,
                 rnd_minibatch_size=cfg.rnd_minibatch_size,
                 curiosity_warmup_batches=cfg.curiosity_warmup_batches,
+                entropy_bonus_coef=cfg.entropy_bonus_coef,
             )
             # END SEMANTIC_RND CODE
             metrics.update(prepare_minibatch_metrics)
@@ -1836,6 +1897,7 @@ async def do_train_step_and_get_sampling_client(
         correctness_threshold=correctness_threshold,
         rnd_minibatch_size=cfg.rnd_minibatch_size,
         curiosity_warmup_batches=cfg.curiosity_warmup_batches,
+        entropy_bonus_coef=cfg.entropy_bonus_coef,
     )
     # END SEMANTIC_RND CODE
     metrics.update(prepare_minibatch_metrics)
@@ -1917,10 +1979,19 @@ async def do_sync_training(
     """
 # END SEMANTIC_RND CODE
     # Initial sampling client
-    sampling_client, _ = await save_checkpoint_and_get_sampling_client(
-        training_client, start_batch, cfg.log_path, cfg.save_every, start_batch,
-        novelty_model=novelty_model, rnd_buffer=rnd_buffer,
-    )
+    # Check if checkpoint already exists for start_batch (e.g., when switching datasets)
+    existing_checkpoint = checkpoint_utils.get_last_checkpoint(cfg.log_path)
+    
+    if existing_checkpoint and existing_checkpoint["batch"] == start_batch:
+        # Use existing checkpoint to avoid conflict
+        sampling_client = training_client.create_sampling_client(existing_checkpoint["sampler_path"])
+        logger.info(f"Using existing checkpoint for batch {start_batch}")
+    else:
+        # Save new checkpoint
+        sampling_client, _ = await save_checkpoint_and_get_sampling_client(
+            training_client, start_batch, cfg.log_path, cfg.save_every, start_batch,
+            novelty_model=novelty_model, rnd_buffer=rnd_buffer,
+        )
 
     for i_batch in range(start_batch, end_batch):
         metrics = {

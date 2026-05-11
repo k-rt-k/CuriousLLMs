@@ -164,7 +164,7 @@ async def cli_main(cli_config: CLIConfig):
     if cli_config.log_path is not None:
         log_path = cli_config.log_path
     else:
-        log_path = f"/tmp/tinker-examples/math_rl/{run_name}"
+        log_path = f"/data/user_data/ksnair/CuriousLLMs_logs/{run_name}"
 
     if cli_config.wandb_name is not None:
         wandb_name = cli_config.wandb_name

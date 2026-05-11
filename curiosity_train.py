@@ -22,6 +22,7 @@ import chz
 import numpy as np
 import tinker
 import torch
+from local_backend import LocalServiceClient
 from tinker_cookbook import checkpoint_utils
 from tinker_cookbook.completers import TinkerTokenCompleter
 from tinker_cookbook.display import colorize_example
@@ -2103,7 +2104,11 @@ async def main(
     # --- End GeminiJudge Initialization ---
     # END SEMANTIC_RND CODE
 
-    service_client = tinker.ServiceClient(base_url=cfg.base_url)
+    service_client = LocalServiceClient(
+        vllm_url=cfg.base_url or os.environ.get("VLLM_URL"),
+        log_path=cfg.log_path,
+        base_model_name=cfg.model_name,
+    )
     training_client = await service_client.create_lora_training_client_async(
         cfg.model_name, rank=cfg.lora_rank
     )

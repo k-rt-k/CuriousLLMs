@@ -24,6 +24,8 @@ import chz
 import numpy as np
 import tinker
 from datasets import load_dataset
+
+from local_backend import LocalServiceClient
 from rich.console import Console
 from rich.table import Table
 
@@ -999,9 +1001,13 @@ async def main(config: EvalConfig):
     # Setup logging
     log_dir = setup_logging(config.log_path)
 
-    # Create service client
-    logger.info("Initializing Tinker service client...")
-    service_client = tinker.ServiceClient()
+    # Create service client (vLLM-backed)
+    logger.info("Initializing local vLLM service client...")
+    service_client = LocalServiceClient(
+        vllm_url=os.environ.get("VLLM_URL"),
+        log_path=config.log_path,
+        base_model_name=config.model_name,
+    )
 
     # Create sampling client
     logger.info(f"Creating sampling client for model: {config.model_name}")

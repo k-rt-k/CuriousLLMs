@@ -1,57 +1,120 @@
 #!/usr/bin/env zsh
 #SBATCH --job-name=cllm-train-big
 #SBATCH --partition=general
-#SBATCH --gres=gpu:A100_80GB:1
-#SBATCH --mem=96G
+#SBATCH --gres=gpu:A100_80GB:4
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=192G
 #SBATCH --time=48:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/user_data/ksnair/CuriousLLMs_logs/slurm-%j.out
+#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-%j.out
 #
-# Big-model RL training (e.g. gpt-oss-20b).
+# Big-model RL training (gpt-oss-20b, Llama-3.1-8B-Instruct, etc.).
 #
-# IMPORTANT: time-multiplex mode (trainer/sampler swap GPU ownership) is not
-# yet implemented in the local backend. For now this script runs the same
-# co-resident pattern as sbatch_train.sh but on an 80 GB GPU, which is enough
-# for ~7-8B models with vLLM + PEFT side-by-side. For 20B MoE (gpt-oss-20b)
-# this will OOM — see slurm/README.md for the deferred big-model plan.
+# Topology:
+#   - vLLM uses GPUs 0..VLLM_TP_SIZE-1 with tensor parallelism
+#     (default VLLM_TP_SIZE=2 -> GPUs 0,1).
+#   - Trainer uses the remaining GPUs via CUDA_VISIBLE_DEVICES
+#     (default: the LAST gpu = GPU 3 on a 4-GPU node).
+#   - To put the trainer on multiple GPUs (FSDP), set TRAINER_NUM_GPUS>1 and
+#     prefix math_train.py with `accelerate launch --num_processes=N`.
+#
+# Override defaults via the environment when sbatch'ing:
+#   sbatch --export=ALL,MODEL_NAME=openai/gpt-oss-20b,LORA_RANK=16,VLLM_TP_SIZE=2 \
+#          slurm/sbatch_train_bigmodel.sh
 
 set -e
 
 export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
 export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
 eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate fmg
+micromamba activate clm
 
-export HF_HOME=/data/user_data/ksnair/.hf_cache
 export HF_HUB_CACHE=/data/hf_cache/hub
 export HF_DATASETS_CACHE=/data/hf_cache/datasets
+unset HF_HOME
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
-: "${MODEL_NAME:=meta-llama/Llama-3.1-8B-Instruct}"
-: "${LORA_RANK:=32}"
-: "${GROUP_SIZE:=16}"
+: "${MODEL_NAME:=openai/gpt-oss-20b}"
+: "${LORA_RANK:=16}"
+: "${GROUP_SIZE:=8}"
 : "${GROUPS_PER_BATCH:=64}"
 : "${LEARNING_RATE:=5e-6}"
 : "${ENV:=mixed}"
 : "${DATASET_SCHEDULE:=m-m}"
 : "${LOSS_FN:=ppo}"
-: "${VLLM_GPU_MEM_FRAC:=0.55}"
+: "${VLLM_TP_SIZE:=2}"
+: "${VLLM_GPU_MEM_FRAC:=0.85}"
+: "${TRAINER_NUM_GPUS:=1}"
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
     STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/user_data/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"
 echo "[train-big] LOG_DIR=$LOG_DIR"
 
-cd /home/ksnair/worktrees/slurm
-source slurm/launch_vllm.sh
+# Split visible GPUs: vLLM gets [0..VLLM_TP_SIZE-1], trainer gets the rest.
+TOTAL_GPUS=$(nvidia-smi -L | wc -l)
+if (( VLLM_TP_SIZE + TRAINER_NUM_GPUS > TOTAL_GPUS )); then
+    echo "[train-big] not enough GPUs: vLLM=$VLLM_TP_SIZE + trainer=$TRAINER_NUM_GPUS > total=$TOTAL_GPUS" >&2
+    exit 1
+fi
 
-python math_train.py \
+# vLLM occupies GPUs 0..VLLM_TP_SIZE-1
+VLLM_VISIBLE=$(seq -s, 0 $((VLLM_TP_SIZE-1)))
+# Trainer occupies the next TRAINER_NUM_GPUS
+TRAINER_VISIBLE=$(seq -s, $VLLM_TP_SIZE $((VLLM_TP_SIZE+TRAINER_NUM_GPUS-1)))
+echo "[train-big] vLLM GPUs=$VLLM_VISIBLE  trainer GPUs=$TRAINER_VISIBLE"
+
+cd /home/ksnair/worktrees/slurm
+
+# --- vLLM in a subshell with restricted CUDA_VISIBLE_DEVICES -------
+(
+    export CUDA_VISIBLE_DEVICES="$VLLM_VISIBLE"
+    export VLLM_TP_SIZE
+    export VLLM_GPU_MEM_FRAC
+    source slurm/launch_vllm.sh
+    # Pause-forever: the parent will use VLLM_URL set into the parent env
+    # via FIFO. Simpler: exec wait on the vllm process.
+    wait $VLLM_PID
+) &
+VLLM_BG_PID=$!
+trap "kill $VLLM_BG_PID 2>/dev/null; pkill -P $VLLM_BG_PID 2>/dev/null" EXIT INT TERM
+
+# Wait for vLLM /health (the subshell's port is deterministic from SLURM_JOB_ID)
+if [[ -n "${SLURM_JOB_ID}" ]]; then
+    VLLM_PORT=$(( 20000 + (SLURM_JOB_ID % 9000) ))
+else
+    echo "[train-big] no SLURM_JOB_ID — cannot derive VLLM_PORT deterministically" >&2
+    exit 1
+fi
+export VLLM_URL="http://127.0.0.1:${VLLM_PORT}"
+echo "[train-big] waiting on $VLLM_URL/health ..."
+attempts=0
+until curl -sf $VLLM_URL/health > /dev/null; do
+    sleep 5
+    attempts=$((attempts + 1))
+    if (( attempts > 240 )); then
+        echo "[train-big] vLLM not ready after 20 min" >&2
+        tail -200 "$LOG_DIR/vllm.log" >&2 || true
+        exit 1
+    fi
+done
+
+# --- trainer with its own CUDA_VISIBLE_DEVICES ---------------------
+export CUDA_VISIBLE_DEVICES="$TRAINER_VISIBLE"
+
+if (( TRAINER_NUM_GPUS > 1 )); then
+    LAUNCHER="accelerate launch --num_processes=$TRAINER_NUM_GPUS --num_machines=1 --mixed_precision=bf16"
+else
+    LAUNCHER="python"
+fi
+
+$LAUNCHER math_train.py \
     model_name="$MODEL_NAME" \
     lora_rank="$LORA_RANK" \
     group_size="$GROUP_SIZE" \

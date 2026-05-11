@@ -32,13 +32,16 @@ def unload_lora(vllm_url: str, name: str) -> None:
 
 
 def load_lora(vllm_url: str, name: str, adapter_dir: str) -> None:
-    """Load `adapter_dir` under `name`. Raises on failure."""
-    r = _post(
-        vllm_url,
-        "/v1/load_lora_adapter",
-        {"lora_name": name, "lora_path": adapter_dir},
-        timeout=180.0,
-    )
+    """Load `adapter_dir` under `name`. Idempotent on `name`: if vLLM reports
+    the adapter is already loaded, re-load it in place so weights match the
+    fresh files on disk.
+    """
+    body = {"lora_name": name, "lora_path": adapter_dir}
+    r = _post(vllm_url, "/v1/load_lora_adapter", body, timeout=180.0)
+    if r.status_code == 400 and "already been loaded" in r.text:
+        # vLLM 0.15+: opt into in-place reload so we pick up new weights.
+        body["load_inplace"] = True
+        r = _post(vllm_url, "/v1/load_lora_adapter", body, timeout=180.0)
     if r.status_code >= 400:
         raise RuntimeError(
             f"load_lora_adapter(name={name}, path={adapter_dir}) -> "

@@ -2023,12 +2023,14 @@ async def main(
     cfg: Config,
 ):
     """Main training loop for MDP RL."""
+    # tinker-cookbook 0.x dropped wandb_entity from setup_logging — pass via WANDB_ENTITY env if needed.
+    if cfg.wandb_entity:
+        os.environ.setdefault("WANDB_ENTITY", cfg.wandb_entity)
     ml_logger = ml_log.setup_logging(
         log_dir=cfg.log_path,
         wandb_project=cfg.wandb_project,
-        wandb_entity=cfg.wandb_entity,
-        config=cfg,
         wandb_name=cfg.wandb_name,
+        config=cfg,
     )
     if cfg.enable_trace:
         # Get and rename the current (main) task

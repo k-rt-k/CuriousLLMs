@@ -25,6 +25,7 @@ import logging
 from typing import Optional, Sequence
 
 import httpx
+import numpy as np
 import tinker
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,9 @@ class LocalSamplingClient:
             "top_p": sampling_params.top_p,
             "max_tokens": sampling_params.max_tokens,
             "logprobs": 1,
+            # vLLM extension: return per-token ids in `tokens` as "token_id:NNNN".
+            # Without this, `tokens` is detokenized text and we can't recover ids.
+            "return_tokens_as_token_ids": True,
         }
         if sampling_params.top_k is not None and sampling_params.top_k > 0:
             body["top_k"] = sampling_params.top_k
@@ -189,14 +193,33 @@ def _to_sample_response(data: dict, prompt_ids: Sequence[int]) -> tinker.SampleR
         finish = choice.get("finish_reason", "stop")
         stop_reason = "length" if finish == "length" else "stop"
 
-        sequences.append(
-            tinker.SampledSequence(
-                stop_reason=stop_reason,
-                tokens=list(token_ids),
-                logprobs=list(token_logprobs) if token_logprobs else None,
-            )
-        )
+        sequences.append(_make_sampled_sequence(
+            stop_reason=stop_reason,
+            token_ids=list(token_ids),
+            token_logprobs=list(token_logprobs) if token_logprobs else None,
+        ))
     return tinker.SampleResponse(sequences=sequences)
+
+
+def _make_sampled_sequence(stop_reason, token_ids, token_logprobs):
+    """tinker.SampledSequence's constructor changed between 0.11 and 0.19.
+    0.11: (stop_reason, tokens, logprobs)
+    0.19: (stop_reason, tokens_np, logprobs_np, _tokens_list, _logprobs_list)
+    Try the new shape first, then fall back.
+    """
+    try:
+        return tinker.SampledSequence(
+            stop_reason=stop_reason,
+            tokens_np=np.asarray(token_ids, dtype=np.int64),
+            logprobs_np=(np.asarray(token_logprobs, dtype=np.float32)
+                         if token_logprobs is not None else None),
+        )
+    except TypeError:
+        return tinker.SampledSequence(
+            stop_reason=stop_reason,
+            tokens=list(token_ids),
+            logprobs=list(token_logprobs) if token_logprobs else None,
+        )
 
 
 def _parse_vllm_token_ids(raw_tokens: list[str]) -> list[int]:

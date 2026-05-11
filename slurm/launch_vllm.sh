@@ -22,6 +22,7 @@
 : "${VLLM_GPU_MEM_FRAC:=0.45}"
 : "${VLLM_DTYPE:=bfloat16}"
 : "${VLLM_MAX_MODEL_LEN:=4096}"
+: "${VLLM_TP_SIZE:=1}"
 : "${VLLM_EXTRA_ARGS:=}"
 
 if [[ -z "${VLLM_PORT}" ]]; then
@@ -38,10 +39,13 @@ export VLLM_URL="http://127.0.0.1:${VLLM_PORT}"
 
 mkdir -p "$LOG_DIR"
 
-echo "[launch_vllm] starting vLLM model=$MODEL_NAME port=$VLLM_PORT gpu_mem=$VLLM_GPU_MEM_FRAC"
+echo "[launch_vllm] starting vLLM model=$MODEL_NAME port=$VLLM_PORT gpu_mem=$VLLM_GPU_MEM_FRAC tp=$VLLM_TP_SIZE"
+# Required for /v1/{load,unload}_lora_adapter to be served (vLLM 0.15+).
+export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_NAME" \
     --port "$VLLM_PORT" \
+    --tensor-parallel-size "$VLLM_TP_SIZE" \
     --enable-lora \
     --max-loras 2 \
     --max-lora-rank "$LORA_RANK" \

@@ -6,38 +6,32 @@
 #SBATCH --time=4:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/user_data/ksnair/CuriousLLMs_logs/slurm-eval-%j.out
+#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-eval-%j.out
 #
 # Eval-only sbatch: launches vLLM, runs math_evaluation.py.
-#
-# Required env vars:
-#   MODEL_NAME    (base model id, e.g. meta-llama/Llama-3.2-3B)
-# Optional:
-#   MODEL_PATH    (PEFT adapter directory; if set, vLLM hot-loads it)
-#   LOG_DIR       (auto-generated if unset)
-#   EXTRA_ARGS    (passed verbatim to math_evaluation.py)
 
 set -e
 
 export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
 export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
 eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate fmg
+micromamba activate clm
 
-export HF_HOME=/data/user_data/ksnair/.hf_cache
 export HF_HUB_CACHE=/data/hf_cache/hub
 export HF_DATASETS_CACHE=/data/hf_cache/datasets
+unset HF_HOME
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 : "${MODEL_NAME:?MODEL_NAME is required}"
 : "${LORA_RANK:=32}"
 : "${VLLM_GPU_MEM_FRAC:=0.85}"   # eval-only: vLLM owns most of the GPU
+: "${VLLM_TP_SIZE:=1}"
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
     STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/user_data/ksnair/CuriousLLMs_logs/eval-${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/eval-${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"

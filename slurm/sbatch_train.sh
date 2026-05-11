@@ -6,17 +6,15 @@
 #SBATCH --time=24:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/user_data/ksnair/CuriousLLMs_logs/slurm-%j.out
+#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-%j.out
 #
-# Small-model RL training on Babel.
-# - Boots a vLLM OpenAI server (co-resident with the trainer on one GPU).
-# - Runs math_train.py against it.
+# Small-model RL training on Babel (single GPU, co-resident vLLM + trainer).
 #
 # Override defaults via the environment when sbatch'ing:
 #   sbatch --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,LORA_RANK=32 \
 #          slurm/sbatch_train.sh
 #
-# Optional env vars:
+# Optional env vars (all have defaults):
 #   MODEL_NAME       (default meta-llama/Llama-3.2-3B)
 #   LORA_RANK        (default 32)
 #   GROUP_SIZE       (default 16)
@@ -25,21 +23,23 @@
 #   ENV              (default mixed)
 #   DATASET_SCHEDULE (default m-m)
 #   LOSS_FN          (default ppo)
-#   LOG_DIR          (default auto-generated under /data/user_data/ksnair/CuriousLLMs_logs)
+#   LOG_DIR          (default auto-generated under /data/hf_cache/ksnair/CuriousLLMs_logs/)
 #   EXTRA_ARGS       (passed verbatim to math_train.py)
 
 set -e
 
 # --- micromamba ----------------------------------------------------
+# clm env has vllm 0.15.1 + torch + peft + transformers already installed.
 export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
 export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
 eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate fmg
+micromamba activate clm
 
-# --- HF cache ------------------------------------------------------
-export HF_HOME=/data/user_data/ksnair/.hf_cache
+# --- HF cache (shared, writable for hpcuser) -----------------------
+# Avoid /data/user_data/ksnair entirely — use the shared /data/hf_cache.
 export HF_HUB_CACHE=/data/hf_cache/hub
 export HF_DATASETS_CACHE=/data/hf_cache/datasets
+unset HF_HOME  # let HF default; HF_HUB_CACHE is the load-bearing one
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
@@ -53,11 +53,12 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${DATASET_SCHEDULE:=m-m}"
 : "${LOSS_FN:=ppo}"
 : "${VLLM_GPU_MEM_FRAC:=0.45}"
+: "${VLLM_TP_SIZE:=1}"
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
     STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/user_data/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"

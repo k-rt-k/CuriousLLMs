@@ -104,10 +104,16 @@ class LocalTrainingClient:
         self.device = device
         self.dtype = dtype
         self.attn_implementation = attn_implementation
-        self.gpu_memory_fraction = gpu_memory_fraction
+        # Env-var overrides for sbatch wrappers that can't reach the chz CLI.
+        env_mem = os.environ.get("LOCAL_TRAINER_GPU_MEM_FRAC")
+        self.gpu_memory_fraction = float(env_mem) if env_mem else gpu_memory_fraction
         self.ppo_clip_eps = ppo_clip_eps
         self.lora_alpha = lora_alpha or (2 * lora_rank)
-        self.lora_target_modules = lora_target_modules
+        env_targets = os.environ.get("LOCAL_LORA_TARGETS")
+        self.lora_target_modules = env_targets if env_targets else lora_target_modules
+        # `target_modules` can be a comma-list (env var) or "all-linear" sentinel.
+        if isinstance(self.lora_target_modules, str) and "," in self.lora_target_modules:
+            self.lora_target_modules = [t.strip() for t in self.lora_target_modules.split(",") if t.strip()]
         self.lora_dropout = lora_dropout
 
         # Set later by _init_async

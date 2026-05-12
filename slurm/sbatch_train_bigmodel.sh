@@ -71,6 +71,7 @@ TRAINER_VISIBLE=$(seq -s, $VLLM_TP_SIZE $((VLLM_TP_SIZE+TRAINER_NUM_GPUS-1)))
 echo "[train-big] vLLM GPUs=$VLLM_VISIBLE  trainer GPUs=$TRAINER_VISIBLE"
 
 cd /home/ksnair/worktrees/slurm
+export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 
 # --- vLLM in a subshell with restricted CUDA_VISIBLE_DEVICES -------
 (

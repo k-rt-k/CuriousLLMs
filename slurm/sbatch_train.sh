@@ -66,6 +66,7 @@ echo "[train] LOG_DIR=$LOG_DIR"
 
 # --- vLLM ----------------------------------------------------------
 cd /home/ksnair/worktrees/slurm
+export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 source slurm/launch_vllm.sh
 
 # --- training ------------------------------------------------------

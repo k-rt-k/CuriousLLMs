@@ -38,6 +38,7 @@ mkdir -p "$LOG_DIR"
 echo "[eval] LOG_DIR=$LOG_DIR"
 
 cd /home/ksnair/worktrees/slurm
+export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 source slurm/launch_vllm.sh
 
 EXTRA_MODEL_PATH=""

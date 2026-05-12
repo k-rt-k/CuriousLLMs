@@ -43,11 +43,10 @@ echo "[launch_vllm] starting vLLM model=$MODEL_NAME port=$VLLM_PORT gpu_mem=$VLL
 # Required for /v1/{load,unload}_lora_adapter to be served (vLLM 0.15+).
 export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 
-# vLLM 0.20+ defaults to DeepGEMM for MoE FP8 paths (e.g. gpt-oss). DeepGEMM is
-# a separate package (deepseek-ai/DeepGEMM) and isn't installed by default. Use
-# the pure-PyTorch / Marlin fallback unless the user opts in.
-export VLLM_USE_DEEP_GEMM=${VLLM_USE_DEEP_GEMM:-0}
-export VLLM_MOE_USE_DEEP_GEMM=${VLLM_MOE_USE_DEEP_GEMM:-0}
+# vLLM 0.20+ defaults to DeepGEMM for MoE FP8 paths (e.g. gpt-oss). DeepGEMM
+# (deepseek-ai/DeepGEMM) is installed in the `clm` env — see slurm/README.md
+# section "Manual env tweaks". To force the pure-PyTorch / Marlin fallback,
+# set VLLM_USE_DEEP_GEMM=0 and VLLM_MOE_USE_DEEP_GEMM=0 before sbatch.
 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_NAME" \
     --port "$VLLM_PORT" \

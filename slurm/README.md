@@ -23,6 +23,50 @@ The rest of `tinker_cookbook` (envs, renderers, RL types, rollouts, data
 processing, KL/PPO metrics, evaluator base class, checkpoint_utils) is reused
 unchanged via the git submodule.
 
+## Manual env tweaks (gpt-oss / MoE LoRA)
+
+Two changes were applied to the `clm` micromamba env to make `openai/gpt-oss-20b`
+LoRA training work end-to-end on vLLM 0.20.2. **Both are env-local, not in this
+repo.** If you recreate the env, re-apply both.
+
+### 1. DeepGEMM (Hopper FP8 fast path for MoE)
+
+vLLM 0.20.2 defaults to DeepGEMM for MoE FP8 attention paths (e.g. gpt-oss).
+Without it, vLLM aborts with `RuntimeError: DeepGEMM backend is not available
+or outdated`. Build from source (the PyPI package of the same name is
+unrelated):
+
+```bash
+export CUDA_HOME=/usr/local/cuda-12.9
+export PATH=$CUDA_HOME/bin:$HOME/micromamba/envs/clm/bin:$PATH
+mkdir -p ~/build_deepgemm && cd ~/build_deepgemm
+curl -sO https://raw.githubusercontent.com/vllm-project/vllm/v0.20.2/tools/install_deepgemm.sh
+bash install_deepgemm.sh
+python -c "import deep_gemm; print(deep_gemm.__version__)"   # 2.5.0+891d57b
+```
+
+### 2. lora_shrink_op `.contiguous()` patch
+
+vLLM 0.20.2 (and main) ship a triton kernel that asserts inputs are contiguous,
+but the gpt-oss qkv_proj path feeds non-contiguous sliced views into it. We
+patch the kernel to make the tensors contiguous instead of asserting.
+
+```bash
+F=$HOME/micromamba/envs/clm/lib/python3.11/site-packages/vllm/lora/ops/triton_ops/lora_shrink_op.py
+cp "$F" "$F.orig"   # idempotent if .orig already exists
+# In F, replace:
+#     assert inputs.is_contiguous()
+#     assert output_tensor.is_contiguous()
+# with:
+#     if not inputs.is_contiguous():
+#         inputs = inputs.contiguous()
+#     if not output_tensor.is_contiguous():
+#         output_tensor = output_tensor.contiguous()
+```
+
+Revert via `cp "$F.orig" "$F"`. Upstream tracking: vLLM PR #40338 / bnellnm
+suggested this `.contiguous()` bandaid; not merged as of vLLM main on 2026-05-12.
+
 ## Setup
 
 ```bash

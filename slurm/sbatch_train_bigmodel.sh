@@ -126,4 +126,5 @@ $LAUNCHER math_train.py \
     loss_fn="$LOSS_FN" \
     base_url="$VLLM_URL" \
     log_path="$LOG_DIR" \
+    behavior_if_log_dir_exists=resume \
     ${=EXTRA_ARGS}

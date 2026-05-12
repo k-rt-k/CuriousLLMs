@@ -103,7 +103,9 @@ class LocalTrainingClient:
         self.log_path = log_path or os.environ.get("LOG_DIR") or "."
         self.device = device
         self.dtype = dtype
-        self.attn_implementation = attn_implementation
+        # Env override for models that don't support sdpa (e.g. GptOss → eager).
+        env_attn = os.environ.get("LOCAL_ATTN_IMPL")
+        self.attn_implementation = env_attn if env_attn else attn_implementation
         # Env-var overrides for sbatch wrappers that can't reach the chz CLI.
         env_mem = os.environ.get("LOCAL_TRAINER_GPU_MEM_FRAC")
         self.gpu_memory_fraction = float(env_mem) if env_mem else gpu_memory_fraction

@@ -541,13 +541,32 @@ def remove_mask(datum: tinker.Datum) -> tinker.Datum:
     )
 
 
+def _accumulate_fwd_bwd_metrics(metrics: dict | None, fwd_bwd_metrics: dict) -> None:
+    """Merge per-substep fwd/bwd metrics (loss, response_tokens) into the caller's
+    per-iter metrics dict. Multiple substeps are weighted-averaged by response
+    token count so the reported loss reflects per-token mean across the batch."""
+    if metrics is None:
+        return
+    loss = float(fwd_bwd_metrics.get("loss", float("nan")))
+    n_resp = float(fwd_bwd_metrics.get("response_tokens", 0.0))
+    prev_loss_sum = metrics.get("_loss_sum", 0.0)
+    prev_n = metrics.get("_loss_n", 0.0)
+    metrics["_loss_sum"] = prev_loss_sum + loss * n_resp
+    metrics["_loss_n"] = prev_n + n_resp
+    denom = max(metrics["_loss_n"], 1.0)
+    metrics["loss/train"] = metrics["_loss_sum"] / denom
+    metrics["loss/response_tokens"] = metrics["_loss_n"]
+
+
 @scope
 async def forward_backward(
     training_client: tinker.TrainingClient,
     batch_d: List[tinker.Datum],
     loss_fn: Literal["importance_sampling", "ppo"],
+    metrics: dict | None = None,
 ) -> List[torch.Tensor]:
-    """Accumulate gradients on a minibatch of data"""
+    """Accumulate gradients on a minibatch of data. If `metrics` is provided,
+    merges per-batch loss + response-token count into it."""
     fwd_bwd_future = await training_client.forward_backward_async(
         list(map(remove_mask, batch_d)), loss_fn=loss_fn
     )
@@ -559,7 +578,7 @@ async def forward_backward(
         training_logprobs = output["logprobs"].to_torch()
         training_logprobs_D.append(training_logprobs)
 
-    # We dont display fwd_bwd_result.metrics to avoid spam
+    _accumulate_fwd_bwd_metrics(metrics, getattr(fwd_bwd_result, "metrics", {}) or {})
     return training_logprobs_D
 
 
@@ -570,12 +589,15 @@ async def train_step(
     learning_rate: float,
     num_substeps: int,
     loss_fn: Literal["importance_sampling", "ppo"],
+    metrics: dict | None = None,
 ) -> List[torch.Tensor]:
     """Train the model on collected trajectories."""
     batches_md = split_list(data_D, min(num_substeps, len(data_D)))
     training_logprobs_D: list[torch.Tensor] = []
     for batch_d in batches_md:
-        training_logprobs = await forward_backward(training_client, batch_d, loss_fn)
+        training_logprobs = await forward_backward(
+            training_client, batch_d, loss_fn, metrics=metrics
+        )
         training_logprobs_D.extend(training_logprobs)
         await optim_step(training_client, learning_rate)
     return training_logprobs_D
@@ -1729,6 +1751,7 @@ async def do_train_step_streaming_and_get_sampling_client(
                     training_client,
                     data_D,
                     cfg.loss_fn,
+                    metrics=metrics,
                 )
             all_data_D.extend(data_D)
             all_training_logprobs_D.extend(training_logprobs_D)
@@ -1848,6 +1871,7 @@ async def do_train_step_and_get_sampling_client(
             cfg.learning_rate,
             cfg.num_substeps,
             cfg.loss_fn,
+            metrics=metrics,
         )
 
     # RND training now happens inside prepare_minibatch via buffer-based approach

@@ -88,10 +88,14 @@ def build_format_data(
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Pass cache_dir explicitly so we don't get bitten by datasets' offline
+    # fallback scanning unwritable shared cache locations on compute nodes.
+    import os as _os
+    cache_dir = _os.environ.get("HF_DATASETS_CACHE")
     if dataset_config is not None:
-        ds = load_dataset(dataset_name, dataset_config, split=dataset_split)
+        ds = load_dataset(dataset_name, dataset_config, split=dataset_split, cache_dir=cache_dir)
     else:
-        ds = load_dataset(dataset_name, split=dataset_split)
+        ds = load_dataset(dataset_name, split=dataset_split, cache_dir=cache_dir)
     ds = ds.shuffle(seed=seed)
     if max_rows is not None:
         ds = ds.select(range(min(max_rows, len(ds))))

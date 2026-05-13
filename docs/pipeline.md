@@ -63,11 +63,23 @@ For **gpt-oss-20b** specifically, two manual env patches are required (DeepGEMM 
 
 ### Cache layout
 
+`sbatch_format.sh` forces writable per-user caches because `/data/hf_cache/{hub,datasets}` is the community-shared cache and the filelock that both `huggingface_hub` and `datasets` acquire on read needs **write** access — which our user has on the login node but not from compute:
+
 ```bash
-export HF_HUB_CACHE=/data/hf_cache/hub          # shared, writable for hpcuser
-export HF_DATASETS_CACHE=/data/hf_cache/datasets
-unset HF_HOME                                    # let HF default
+export HF_HUB_CACHE=/data/hf_cache/ksnair/.hf_hub_cache
+export HF_DATASETS_CACHE=/data/hf_cache/ksnair/.hf_datasets_cache
 ```
+
+This means models and datasets used by the format SFT stage need to be **pre-staged** on the login node into those per-user paths (where you have internet), e.g.:
+
+```bash
+export HF_HUB_CACHE=/data/hf_cache/ksnair/.hf_hub_cache
+export HF_DATASETS_CACHE=/data/hf_cache/ksnair/.hf_datasets_cache
+python -c "from transformers import AutoModelForCausalLM, AutoTokenizer; AutoModelForCausalLM.from_pretrained('<model>'); AutoTokenizer.from_pretrained('<model>')"
+python -c "from datasets import load_dataset; load_dataset('<dataset>', '<config>', split='train')"
+```
+
+`sbatch_train.sh` and `sbatch_train_bigmodel.sh` still default to `HF_DATASETS_CACHE=/data/hf_cache/datasets` and `HF_HUB_CACHE=/data/hf_cache/hub`. Those have been working for the RL flow because the math envs route around the locking path that bites format SFT; if you hit the same `PermissionError: ... .lock` from those scripts, apply the same override there.
 
 `LOG_DIR` defaults to `/data/hf_cache/ksnair/CuriousLLMs_logs/<stamp>-<jobid>-<model>` (configurable; see per-stage docs below).
 

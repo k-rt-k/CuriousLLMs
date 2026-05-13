@@ -43,9 +43,15 @@ eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
 micromamba activate clm
 
 # --- HF cache (shared, writable for hpcuser) -----------------------
-export HF_HUB_CACHE=/data/hf_cache/hub
-export HF_DATASETS_CACHE=/data/hf_cache/datasets
+# NOTE: /data/hf_cache/{hub,datasets} is the community-shared cache and is
+# NOT writable from compute nodes for our user — both HF datasets and HF Hub
+# acquire filelock-style locks on read which require write access. Force the
+# writable per-user paths here regardless of the inherited shell env (the
+# user's ~/.zshrc may set HF_DATASETS_CACHE to the shared path).
 unset HF_HOME
+export HF_HUB_CACHE=/data/hf_cache/ksnair/.hf_hub_cache
+export HF_DATASETS_CACHE=/data/hf_cache/ksnair/.hf_datasets_cache
+mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE"
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 

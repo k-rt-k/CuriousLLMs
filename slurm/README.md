@@ -4,6 +4,10 @@ This worktree replaces the Tinker (Thinking Machines) cloud API with a local
 vLLM + PyTorch+PEFT stack so training and inference run entirely on Babel via
 `sbatch`.
 
+**For the full operator guide (pipeline overview, stage-by-stage recipes,
+CLI reference, troubleshooting), see [../docs/pipeline.md](../docs/pipeline.md).**
+This file covers SLURM-specific bits: env patches, memory rules, smoke tests.
+
 ## How it works
 
 The adapter layer lives in `local_backend/`:

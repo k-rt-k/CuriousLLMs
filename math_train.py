@@ -25,6 +25,7 @@ class CLIConfig:
     lora_rank: int = 32
     renderer_name: str | None = None
     load_checkpoint_path: str | None = None
+    init_from_adapter: str | None = None
 
     # Environment configuration
     env: str = "mixed"  # Options: arithmetic, math, polaris, deepmath, gsm8k, mixed
@@ -219,6 +220,7 @@ async def cli_main(cli_config: CLIConfig):
         log_path=log_path,
         base_url=cli_config.base_url,
         load_checkpoint_path=cli_config.load_checkpoint_path,
+        init_from_adapter=cli_config.init_from_adapter,
         compute_post_kl=cli_config.compute_post_kl,
         kl_penalty_coef=cli_config.kl_penalty_coef,
         num_substeps=cli_config.num_substeps,

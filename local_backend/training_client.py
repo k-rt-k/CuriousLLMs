@@ -193,7 +193,7 @@ class LocalTrainingClient:
     async def forward_backward_async(
         self,
         data: Sequence[tinker.Datum],
-        loss_fn: Literal["ppo", "importance_sampling"] = "ppo",
+        loss_fn: Literal["ppo", "importance_sampling", "nll"] = "ppo",
     ) -> LocalFuture[_ForwardBackwardResult]:
         per_datum_logprobs: list[TensorData] = []
         total_loss = torch.zeros((), device=self.device, dtype=torch.float32)
@@ -203,29 +203,40 @@ class LocalTrainingClient:
             input_ids = torch.tensor(
                 datum.model_input.to_ints(), dtype=torch.long, device=self.device
             ).unsqueeze(0)  # [1, T]
+            T = input_ids.shape[1]
 
             target_tokens = _td_to_tensor(datum.loss_fn_inputs["target_tokens"]).to(
                 device=self.device, dtype=torch.long
             )
-            sample_logp = _td_to_tensor(datum.loss_fn_inputs["logprobs"]).to(
-                device=self.device, dtype=torch.float32
-            )
-            advantages = _td_to_tensor(datum.loss_fn_inputs["advantages"]).to(
-                device=self.device, dtype=torch.float32
-            )
-            if "mask" in datum.loss_fn_inputs:
-                mask = _td_to_tensor(datum.loss_fn_inputs["mask"]).to(
+            assert target_tokens.shape[0] == T, f"target_tokens {target_tokens.shape} vs T={T}"
+
+            # SFT (NLL) reads only target_tokens + weights. RL reads logprobs+advantages+mask.
+            sample_logp = None
+            advantages = None
+            mask = None
+            weights = None
+            if loss_fn == "nll":
+                weights = _td_to_tensor(datum.loss_fn_inputs["weights"]).to(
                     device=self.device, dtype=torch.float32
                 )
+                assert weights.shape[0] == T
             else:
-                # remove_mask in curiosity_train.py strips it; recover from advantages.
-                mask = (advantages != 0).to(torch.float32)
-
-            T = input_ids.shape[1]
-            assert target_tokens.shape[0] == T, f"target_tokens {target_tokens.shape} vs T={T}"
-            assert advantages.shape[0] == T
-            assert sample_logp.shape[0] == T
-            assert mask.shape[0] == T
+                sample_logp = _td_to_tensor(datum.loss_fn_inputs["logprobs"]).to(
+                    device=self.device, dtype=torch.float32
+                )
+                advantages = _td_to_tensor(datum.loss_fn_inputs["advantages"]).to(
+                    device=self.device, dtype=torch.float32
+                )
+                if "mask" in datum.loss_fn_inputs:
+                    mask = _td_to_tensor(datum.loss_fn_inputs["mask"]).to(
+                        device=self.device, dtype=torch.float32
+                    )
+                else:
+                    # remove_mask in curiosity_train.py strips it; recover from advantages.
+                    mask = (advantages != 0).to(torch.float32)
+                assert advantages.shape[0] == T
+                assert sample_logp.shape[0] == T
+                assert mask.shape[0] == T
 
             outputs = self.model(input_ids=input_ids, use_cache=False)
             logits = outputs.logits.squeeze(0)  # [T, V]
@@ -238,9 +249,13 @@ class LocalTrainingClient:
                 sample_logp=sample_logp,
                 advantages=advantages,
                 mask=mask,
+                weights=weights,
                 ppo_clip_eps=self.ppo_clip_eps,
             )
-            n_resp = int(mask.sum().item())
+            if loss_fn == "nll":
+                n_resp = int((weights > 0).sum().item())
+            else:
+                n_resp = int(mask.sum().item())
             # Reweight per-datum mean loss by # response tokens so the overall
             # gradient is the per-token average across the whole micro-batch.
             weight = max(n_resp, 1)
@@ -397,6 +412,78 @@ class LocalTrainingClient:
                 logger.warning("RNG restore failed: %s", e)
 
         logger.info("load_state(%s) ok (step=%d)", path, self.step_counter)
+        return LocalFuture(None)
+
+    async def load_adapter_weights_async(self, path: str) -> LocalFuture[None]:
+        """Warm-start: load only adapter weights. Leaves optimizer/step_counter/RNG fresh.
+
+        Use this to bootstrap a new RL run from a previously-trained LoRA (e.g.
+        a cold-start SFT adapter). Compare to `load_state_async`, which restores
+        the full training state (optimizer momentum, step counter, RNG).
+        Accepts either a bare adapter dir or a state dir (both contain
+        adapter_config.json).
+        """
+        if self.model is None:
+            raise RuntimeError(
+                "LocalTrainingClient._init_async() must run before load_adapter_weights_async; "
+                "use LocalServiceClient.create_lora_training_client_async to construct."
+            )
+        cfg = os.path.join(path, "adapter_config.json")
+        if not os.path.exists(cfg):
+            raise FileNotFoundError(f"No adapter_config.json found under {path}")
+
+        # Cheap up-front rank check — PEFT will silently load a mismatched-rank
+        # adapter, leading to wrong tensor shapes later. Fail loudly here.
+        try:
+            with open(cfg) as f:
+                adapter_cfg = json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse {cfg}: {e}") from e
+        cfg_rank = adapter_cfg.get("r")
+        if cfg_rank is not None and int(cfg_rank) != int(self.lora_rank):
+            raise ValueError(
+                f"LoRA rank mismatch loading {path}: adapter r={cfg_rank}, "
+                f"trainer lora_rank={self.lora_rank}. Re-init the trainer with the same rank."
+            )
+
+        # Serialize against concurrent vLLM weight-syncs so a sampler creation
+        # can't race with the in-flight adapter swap.
+        async with self._adapter_swap_lock:
+            try:
+                existing = set(getattr(self.model, "peft_config", {}).keys())
+            except Exception:
+                existing = set()
+            if "default" in existing:
+                try:
+                    self.model.delete_adapter("default")
+                except Exception as e:
+                    logger.warning("delete_adapter('default') failed before warm-start: %s", e)
+            self.model.load_adapter(path, adapter_name="default", is_trainable=True)
+            # set_adapter MUST succeed — silent failure leaves the wrong adapter
+            # active and training proceeds with wrong weights. Let real errors propagate.
+            self.model.set_adapter("default")
+
+            # Rebuild optimizer over the freshly-loaded LoRA params so AdamW state
+            # is fresh. (The previous optimizer was bound to deleted param tensors.)
+            # _adam_state retains lr/betas/eps/weight_decay (set by the user via
+            # optim_step or by _init_async defaults); only the momentum state resets.
+            trainable = [p for p in self.model.parameters() if p.requires_grad]
+            if not trainable:
+                raise RuntimeError(
+                    f"No trainable LoRA params after load_adapter({path}). Adapter may be corrupted."
+                )
+            self.optimizer = torch.optim.AdamW(
+                trainable,
+                lr=self._adam_state["lr"],
+                betas=(self._adam_state["beta1"], self._adam_state["beta2"]),
+                eps=self._adam_state["eps"],
+                weight_decay=self._adam_state["weight_decay"],
+            )
+            self.optimizer.zero_grad(set_to_none=True)
+            self.step_counter = 0
+            self._last_loss_value = None
+
+        logger.info("load_adapter_weights(%s) ok — fresh optimizer, step=0", path)
         return LocalFuture(None)
 
     # ------------------------------------------------------------------

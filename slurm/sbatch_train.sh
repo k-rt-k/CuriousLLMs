@@ -15,16 +15,17 @@
 #          slurm/sbatch_train.sh
 #
 # Optional env vars (all have defaults):
-#   MODEL_NAME       (default meta-llama/Llama-3.2-3B)
-#   LORA_RANK        (default 32)
-#   GROUP_SIZE       (default 16)
-#   GROUPS_PER_BATCH (default 128)
-#   LEARNING_RATE    (default 7e-5)
-#   ENV              (default mixed)
-#   DATASET_SCHEDULE (default m-m)
-#   LOSS_FN          (default ppo)
-#   LOG_DIR          (default auto-generated under /data/hf_cache/ksnair/CuriousLLMs_logs/)
-#   EXTRA_ARGS       (passed verbatim to math_train.py)
+#   MODEL_NAME         (default meta-llama/Llama-3.2-3B)
+#   LORA_RANK          (default 32)
+#   GROUP_SIZE         (default 16)
+#   GROUPS_PER_BATCH   (default 128)
+#   LEARNING_RATE      (default 7e-5)
+#   ENV                (default mixed)
+#   DATASET_SCHEDULE   (default m-m)
+#   LOSS_FN            (default ppo)
+#   LOG_DIR            (default auto-generated under /data/hf_cache/ksnair/CuriousLLMs_logs/)
+#   INIT_FROM_ADAPTER  (default unset; path to a LoRA adapter dir to warm-start from)
+#   EXTRA_ARGS         (passed verbatim to math_train.py)
 
 set -e
 
@@ -82,4 +83,5 @@ python math_train.py \
     base_url="$VLLM_URL" \
     log_path="$LOG_DIR" \
     behavior_if_log_dir_exists=resume \
+    ${INIT_FROM_ADAPTER:+init_from_adapter="$INIT_FROM_ADAPTER"} \
     ${=EXTRA_ARGS}

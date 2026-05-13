@@ -127,4 +127,5 @@ $LAUNCHER math_train.py \
     base_url="$VLLM_URL" \
     log_path="$LOG_DIR" \
     behavior_if_log_dir_exists=resume \
+    ${INIT_FROM_ADAPTER:+init_from_adapter="$INIT_FROM_ADAPTER"} \
     ${=EXTRA_ARGS}

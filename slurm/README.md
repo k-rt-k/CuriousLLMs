@@ -109,7 +109,8 @@ Optional env overrides (all have defaults):
 | `DATASET_SCHEDULE` | `m-m` | `e-h`, `m-h`, `e-m`, `m-m` |
 | `LOSS_FN` | `ppo` | `ppo` or `importance_sampling` |
 | `VLLM_GPU_MEM_FRAC` | 0.45 | vLLM's share of GPU; trainer takes the rest |
-| `LOG_DIR` | auto-generated under `/data/user_data/ksnair/CuriousLLMs_logs/` | |
+| `LOG_DIR` | auto-generated under `/data/hf_cache/ksnair/CuriousLLMs_logs/` | |
+| `INIT_FROM_ADAPTER` | unset | Path to a LoRA adapter directory (e.g. a format SFT `states/format_final/`). Loads weights only — optimizer starts fresh, batch counter at 0. |
 | `EXTRA_ARGS` | empty | Anything else, passed verbatim to `math_train.py` |
 
 ### Eval-only
@@ -118,6 +119,39 @@ Optional env overrides (all have defaults):
 sbatch --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,MODEL_PATH=/path/to/adapter \
        slurm/sbatch_eval.sh
 ```
+
+### Format SFT cold-start (pre-RL)
+
+DeepSeek-R1-style: teach the LoRA the target output format (chat-template wrapping +
+`\boxed{answer}`) on a HuggingFace dataset of solved problems, then warm-start RL
+from the resulting adapter. Stops RL from having to learn formatting from random
+init.
+
+```bash
+# Stage 1 — format cold-start
+sbatch --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,DATASET_NAME=AI-MO/NuminaMath-CoT,NUM_STEPS=500 \
+       slurm/sbatch_format.sh
+# -> produces /data/hf_cache/ksnair/CuriousLLMs_logs/<stamp>-<jobid>-format-...
+#    The final adapter lives under that dir at  states/format_final/
+
+# Stage 2 — RL warm-started from the format adapter
+sbatch --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,\
+INIT_FROM_ADAPTER=/data/hf_cache/ksnair/CuriousLLMs_logs/<stage1>/states/format_final \
+       slurm/sbatch_train.sh
+```
+
+`sbatch_format.sh` env vars (defaults in parentheses): `MODEL_NAME`
+(`meta-llama/Llama-3.2-3B`), `LORA_RANK` (32), `DATASET_NAME`
+(`AI-MO/NuminaMath-CoT`), `DATASET_SPLIT` (`train`), `DATASET_CONFIG` (unset;
+e.g. `main` for `openai/gsm8k`), `PROBLEM_COLUMN` (`problem`),
+`SOLUTION_COLUMN` (`solution`), `MAX_ROWS` (unset = all), `MAX_SEQ_LEN` (4096),
+`BATCH_SIZE` (8), `NUM_STEPS` (500), `LEARNING_RATE` (1e-4), `SAVE_EVERY` (100),
+`LOG_DIR` (auto).
+
+The data side lives in `local_backend/format_dataset.py` — it loads the HF
+dataset, applies the model's chat template, and builds response-masked Datums
+(weights = 0 on prompt tokens, 1 on solution tokens) using
+`tinker_cookbook.supervised.common.datum_from_tokens_weights`.
 
 ### Big-model (Llama-3.1-8B, Llama-3-8B)
 

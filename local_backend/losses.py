@@ -51,12 +51,28 @@ def ppo_loss(
     return -(obj.sum() / denom)
 
 
-def compute_loss(
-    loss_fn: Literal["ppo", "importance_sampling"],
+def nll_loss(
     new_logp: torch.Tensor,
-    sample_logp: torch.Tensor,
-    advantages: torch.Tensor,
-    mask: torch.Tensor,
+    weights: torch.Tensor,
+) -> torch.Tensor:
+    """Weighted negative log-likelihood for supervised fine-tuning.
+
+    `new_logp` is the per-token logprob of the target token under the current
+    policy; `weights` is 1.0 on response tokens and 0.0 on prompt/padding
+    tokens (the response-mask convention used by
+    ``tinker_cookbook.supervised.common.datum_from_tokens_weights``).
+    """
+    denom = weights.sum().clamp_min(1.0)
+    return -(new_logp * weights).sum() / denom
+
+
+def compute_loss(
+    loss_fn: Literal["ppo", "importance_sampling", "nll"],
+    new_logp: torch.Tensor,
+    sample_logp: torch.Tensor | None = None,
+    advantages: torch.Tensor | None = None,
+    mask: torch.Tensor | None = None,
+    weights: torch.Tensor | None = None,
     *,
     ppo_clip_eps: float = 0.2,
 ) -> torch.Tensor:
@@ -64,4 +80,6 @@ def compute_loss(
         return ppo_loss(new_logp, sample_logp, advantages, mask, clip_eps=ppo_clip_eps)
     if loss_fn == "importance_sampling":
         return importance_sampling_loss(new_logp, sample_logp, advantages, mask)
+    if loss_fn == "nll":
+        return nll_loss(new_logp, weights)
     raise ValueError(f"Unknown loss_fn: {loss_fn}")

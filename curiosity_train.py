@@ -665,6 +665,8 @@ class Config:
     eval_every: int = 5
     save_every: int = 5
     load_checkpoint_path: str | None = None
+    # Warm-start: load only adapter weights, leave optimizer/RNG/step_counter fresh.
+    init_from_adapter: str | None = None
 
     async_config: AsyncConfig | None = None
     stream_minibatch_config: StreamMinibatchConfig | None = None
@@ -2130,6 +2132,19 @@ async def main(
     # --- End GeminiJudge Initialization ---
     # END SEMANTIC_RND CODE
 
+    # Three-way precedence for adapter init:
+    # 1. resume_info (mid-flight restart): full state restore, start_batch from manifest.
+    # 2. cfg.load_checkpoint_path: full state restore (adapter+optim+RNG+step), start_batch=0.
+    # 3. cfg.init_from_adapter: adapter-weights only, fresh optimizer, start_batch=0.
+    # Validate the mutually-exclusive flags BEFORE loading the model so a
+    # misconfigured run fails fast instead of after a multi-minute HF load.
+    if cfg.load_checkpoint_path and cfg.init_from_adapter:
+        raise ValueError(
+            "Both load_checkpoint_path and init_from_adapter are set. "
+            "Pick one: load_checkpoint_path restores the full training state "
+            "(optimizer + RNG + step counter); init_from_adapter is a fresh-optimizer warm-start."
+        )
+
     service_client = LocalServiceClient(
         vllm_url=cfg.base_url or os.environ.get("VLLM_URL"),
         log_path=cfg.log_path,
@@ -2139,13 +2154,18 @@ async def main(
         cfg.model_name, rank=cfg.lora_rank
     )
 
-    load_state_path: str | None = (
-        resume_info["state_path"] if resume_info else cfg.load_checkpoint_path
-    )
-    if load_state_path:
-        future = await training_client.load_state_async(load_state_path)
+    if resume_info:
+        future = await training_client.load_state_async(resume_info["state_path"])
         _ = await future.result_async()
-        logger.info(f"Loaded state from {load_state_path}")
+        logger.info(f"Resumed full state from {resume_info['state_path']}")
+    elif cfg.load_checkpoint_path:
+        future = await training_client.load_state_async(cfg.load_checkpoint_path)
+        _ = await future.result_async()
+        logger.info(f"Loaded full state from {cfg.load_checkpoint_path}")
+    elif cfg.init_from_adapter:
+        future = await training_client.load_adapter_weights_async(cfg.init_from_adapter)
+        _ = await future.result_async()
+        logger.info(f"Warm-started adapter weights from {cfg.init_from_adapter} (fresh optimizer)")
 
     # Get tokenizer - use local get_tokenizer to avoid baseten tokenizer issue
     tokenizer = get_tokenizer(cfg.model_name)

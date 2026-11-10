@@ -85,6 +85,7 @@ source slurm/launch_vllm.sh
 # (behavior_if_log_dir_exists=resume; LOG_DIR is stable per SLURM_JOB_ID).
 on_term() {
     echo "[train] SIGTERM (preempted?) - forwarding to trainer and vLLM" >&2
+    set +e  # errexit must not abort the handler (wait returns 143 after the kill)
     [[ -n "$TRAIN_PID" ]] && kill -TERM "$TRAIN_PID" 2>/dev/null
     [[ -n "$TRAIN_PID" ]] && wait "$TRAIN_PID" 2>/dev/null
     cleanup_vllm

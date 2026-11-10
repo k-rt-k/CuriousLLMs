@@ -102,6 +102,7 @@ stop_vllm() {
 }
 on_term() {
     echo "[train-big] SIGTERM (preempted?) - forwarding to trainer and vLLM" >&2
+    set +e  # errexit must not abort the handler (wait returns 143 after the kill)
     [[ -n "$TRAIN_PID" ]] && kill -TERM "$TRAIN_PID" 2>/dev/null
     [[ -n "$TRAIN_PID" ]] && wait "$TRAIN_PID" 2>/dev/null
     stop_vllm
@@ -133,9 +134,10 @@ done
 # --- trainer with its own CUDA_VISIBLE_DEVICES ---------------------
 export CUDA_VISIBLE_DEVICES="$TRAINER_VISIBLE"
 
+# vLLM is on separate GPUs, so the trainer may use the whole of its own GPUs.
+export LOCAL_TRAINER_GPU_MEM_FRAC=1.0
+
 if (( TRAINER_NUM_GPUS > 1 )); then
-    # vLLM is on separate GPUs, so the trainer may use the whole of its own GPUs.
-    export LOCAL_TRAINER_GPU_MEM_FRAC=1.0
     LAUNCHER=(torchrun --standalone --nproc_per_node="$TRAINER_NUM_GPUS")
 else
     LAUNCHER=(python)

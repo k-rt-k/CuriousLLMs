@@ -322,3 +322,16 @@ def test_chunked_logprobs_and_checkpointing_exact(tiny_model_dir):
                                        msg=lambda s, n=n: f"{n}: {s}")
         for a, b in zip(lp, lp0):
             torch.testing.assert_close(a, b, atol=1e-6, rtol=0)
+
+
+def test_attn_implementation_default(tiny_model_dir, tmp_path):
+    from transformers import GptOssConfig, GptOssForCausalLM
+
+    assert _trainer(tiny_model_dir).model.config._attn_implementation == "sdpa"
+    d = str(tmp_path / "gpt_oss")
+    GptOssForCausalLM(GptOssConfig(
+        hidden_size=32, intermediate_size=32, num_hidden_layers=1, num_attention_heads=4,
+        num_key_value_heads=2, head_dim=8, vocab_size=64, num_local_experts=2,
+        num_experts_per_tok=1, layer_types=["full_attention"])).save_pretrained(d)
+    assert _trainer(d).model.config._attn_implementation == "eager"
+    assert _trainer(tiny_model_dir, attn_implementation="eager").model.config._attn_implementation == "eager"

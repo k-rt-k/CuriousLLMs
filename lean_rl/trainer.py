@@ -25,7 +25,7 @@ import tinker
 import torch
 from torch.utils.checkpoint import checkpoint
 from peft import PeftConfig, get_peft_model, load_peft_weights, set_peft_model_state_dict
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lean_rl.losses import token_sum_loss
 from lean_rl.lora import log_parity_warnings, lora_placement, make_lora_config
@@ -86,6 +86,7 @@ class Trainer:
         micro_batch_tokens: int = 16384,
         logprob_chunk_tokens: int = 2048,
         gradient_checkpointing: bool = True,
+        attn_implementation: str | None = None,
     ):
         if dist is not None or fsdp:
             raise NotImplementedError("multi-rank DP/FSDP is not implemented yet (Task 5)")
@@ -96,7 +97,13 @@ class Trainer:
         self.micro_batch_tokens = micro_batch_tokens
         self.logprob_chunk_tokens = logprob_chunk_tokens
 
-        base = AutoModelForCausalLM.from_pretrained(base_model, torch_dtype=dtype).to(device)
+        if attn_implementation is None:
+            # HF gpt-oss needs eager attention for its attention sinks.
+            model_type = getattr(AutoConfig.from_pretrained(base_model), "model_type", "")
+            attn_implementation = "eager" if model_type == "gpt_oss" else "sdpa"
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model, torch_dtype=dtype, attn_implementation=attn_implementation
+        ).to(device)
         for p in base.parameters():
             p.requires_grad = False
         if getattr(base.config, "final_logit_softcapping", None):

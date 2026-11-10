@@ -194,10 +194,28 @@ INIT_FROM_ADAPTER=/data/.../states/format_final \
 | `LOSS_FN` | `ppo` | `ppo` or `importance_sampling` |
 | `VLLM_GPU_MEM_FRAC` | 0.45 (small) / 0.85 (big) | vLLM's share |
 | `VLLM_TP_SIZE` | 1 (small) / 2 (big) | Tensor parallelism degree |
-| `TRAINER_NUM_GPUS` | (big only) 1 | Use `>1` to launch via `accelerate launch` |
+| `TRAINER_NUM_GPUS` | (big only) 1 | Trainer GPUs on the node. `>1` runs `torchrun --standalone --nproc_per_node=N math_train.py` (data-parallel LoRA; rank 0 drives, other ranks serve) |
 | `INIT_FROM_ADAPTER` | unset | Path to a LoRA adapter dir (warm-start from format SFT). Fresh optimizer, batch 0. |
 | `LOG_DIR` | auto | |
 | `EXTRA_ARGS` | empty | Anything else, passed to `math_train.py` |
+
+Config flags usable via `EXTRA_ARGS` (all sbatch scripts already pass `backend=local`):
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `backend` | `tinker` | `tinker` (cloud) or `local` (vLLM + HF/PEFT). The slurm scripts set `local`. |
+| `kl_reference` | `base` | KL-penalty reference: `base` model or `init` (the `init_from_adapter` adapter). `init` needs `backend=local` and `init_from_adapter`. |
+| `entropy_bonus_coef` | unset | Coefficient of the entropy/perplexity bonus reward; unset disables it. |
+
+### Submit (multi-node, data-parallel trainer)
+
+```bash
+mkdir -p /home/ksnair/CuriousLLMs_logs   # once: SLURM opens the --output file before the script runs
+sbatch --nodes=2 --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,VLLM_TP_SIZE=1 \
+       slurm/sbatch_train_dist.sh
+```
+
+`sbatch_train_dist.sh` (defaults: `--nodes=2`, `--gres=gpu:4`, 1 task per node) runs `slurm/dist_node.sh` on every node via `srun`. Each node starts one vLLM on GPUs `0..VLLM_TP_SIZE-1` and `GPUS_PER_NODE - VLLM_TP_SIZE` trainer ranks (`torchrun --nnodes=$SLURM_NNODES --node_rank=$SLURM_NODEID`, c10d rendezvous at the first node, port `29500 + JOB_ID % 1000`) on the remaining GPUs. Global rank 0 drives the RL loop and its sampling client load-balances across every node's vLLM (`VLLM_URLS`, port `20000 + JOB_ID % 9000`). Takes the same env vars as the table below, plus `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 4); `TRAINER_NUM_GPUS` is not used. `DRY_RUN=1` prints the computed topology and commands without launching.
 
 ### Adapter init priority
 

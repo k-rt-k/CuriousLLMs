@@ -188,6 +188,42 @@ sbatch --gres=gpu:A100_80GB:4 \
        slurm/sbatch_train_bigmodel.sh
 ```
 
+### Multi-node data-parallel training
+
+```bash
+sbatch --nodes=2 --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,VLLM_TP_SIZE=1 \
+       slurm/sbatch_train_dist.sh
+```
+
+`sbatch_train_dist.sh` computes the topology and `srun`s `slurm/dist_node.sh` once per node
+(`--ntasks-per-node=1 --kill-on-bad-exit=1`). Each node runs one vLLM on GPUs `0..VLLM_TP_SIZE-1` and
+`TRAINER_GPUS_PER_NODE = GPUS_PER_NODE - VLLM_TP_SIZE` trainer ranks on the rest
+(`LOCAL_TRAINER_GPU_MEM_FRAC=1.0`), launched with
+`torchrun --nnodes=$SLURM_NNODES --node_rank=$SLURM_NODEID --nproc_per_node=$TRAINER_GPUS_PER_NODE
+--rdzv_backend=c10d --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT`. Each node waits for every node's vLLM
+`/health` before starting torchrun. Rank 0 (first node) drives the loop; its sampling client balances across
+`VLLM_URLS`.
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `--nodes` | 2 | Node count (`NNODES` = `$SLURM_NNODES`) |
+| `GPUS_PER_NODE` | `$SLURM_GPUS_ON_NODE`, else 4 | Header requests `--gres=gpu:4`, 16 CPUs per node |
+| `VLLM_TP_SIZE` | 1 | GPUs per node given to that node's vLLM |
+| `MASTER_ADDR` | first host of `scontrol show hostnames` | Short hostnames (resolve inside Babel) |
+| `MASTER_PORT` | `29500 + JOB_ID % 1000` | torchrun rendezvous |
+| `VLLM_PORT` | `20000 + JOB_ID % 9000` | `VLLM_URLS` = every host at this port |
+| `DRY_RUN` | 0 | `1` prints topology and the srun/torchrun command lines, launches nothing |
+
+All other knobs match `sbatch_train.sh` (`MODEL_NAME`, `LORA_RANK`, `INIT_FROM_ADAPTER`, `EXTRA_ARGS`, ...);
+`LOG_DIR` defaults to `/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-<model>` (shared storage, so a
+requeue resumes into it). On SIGTERM the signal is forwarded to the `srun` step, then to each node's torchrun and
+vLLM. Per-node vLLM logs are in `$LOG_DIR/node<N>/vllm.log`. Not yet verified on a real 2-node job: that Babel
+accepts the `srun` step (fallback: `ssh` into allocated nodes), and requeue-resume.
+
+New config flags (via `EXTRA_ARGS`): `backend` (`tinker`|`local`; scripts pass `local`), `kl_reference`
+(`base`|`init`; `init` uses the `init_from_adapter` warm-start adapter as the KL reference), `entropy_bonus_coef`
+(float, unset = disabled).
+
 `math_evaluation.py` stays single-process (it errors if `WORLD_SIZE>1`) and reads `$VLLM_URLS`
 (comma-separated), then `$VLLM_URL`, for the local backend.
 

@@ -110,7 +110,10 @@ class LocalTrainingClient:
         env_mem = os.environ.get("LOCAL_TRAINER_GPU_MEM_FRAC")
         self.gpu_memory_fraction = float(env_mem) if env_mem else gpu_memory_fraction
         self.ppo_clip_eps = ppo_clip_eps
-        self.lora_alpha = lora_alpha or (2 * lora_rank)
+        # Tinker uses a fixed lora_alpha=32 regardless of rank (see
+        # tinker_cookbook.hyperparam_utils.get_lora_lr_over_full_finetune_lr), so
+        # the LoRA scale alpha/r — and hence the effective LR — matches Tinker.
+        self.lora_alpha = lora_alpha if lora_alpha is not None else 32
         env_targets = os.environ.get("LOCAL_LORA_TARGETS")
         self.lora_target_modules = env_targets if env_targets else lora_target_modules
         # `target_modules` can be a comma-list (env var) or "all-linear" sentinel.

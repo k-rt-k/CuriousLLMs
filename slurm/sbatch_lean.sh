@@ -267,6 +267,10 @@ export MAX_TOKENS GPUS_PER_NODE FSDP GPT_OSS_LM_HEAD EXTRA_ARGS USE_LM_HEAD_PLUG
 export MASTER_ADDR MASTER_PORT VLLM_PORT VLLM_URLS LOG_DIR REPO_DIR
 printf '%s\n' "${RANK_HOST[@]}" > "$HOSTFILE"
 export SLURM_HOSTFILE="$HOSTFILE"
+# sbatch's header exports these job-level values, which srun reads as INPUT defaults and which
+# would conflict with --ntasks/--distribution=arbitrary (e.g. ntasks-per-node=1); the explicit
+# srun flags carry everything needed, and nothing later in this script uses them.
+unset SLURM_NTASKS_PER_NODE SLURM_NTASKS SLURM_NNODES SLURM_TASKS_PER_NODE SLURM_CPUS_PER_TASK
 "${SRUN_CMD[@]}" &
 SRUN_PID=$!
 rc=0

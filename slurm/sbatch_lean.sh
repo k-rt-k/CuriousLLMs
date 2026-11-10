@@ -19,12 +19,14 @@
 # Topology (see docs/pipeline.md "Lean local trainer"):
 #   - Node 0 (the batch host) runs the ONLY vLLM, on GPUs 0..VLLM_TP_SIZE-1.
 #   - Trainer ranks: GPUS_PER_NODE - VLLM_TP_SIZE on node 0 (GPUs VLLM_TP_SIZE..end),
-#     GPUS_PER_NODE on every other node. One `srun` task per node re-executes this
-#     script in --worker mode, which runs
-#       torchrun --nnodes=$SLURM_NNODES --node_rank=$SLURM_NODEID --nproc_per_node=<n>
-#                --rdzv_backend=c10d --rdzv_id=$SLURM_JOB_ID
-#                --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT -m lean_rl.train ...
-#     Global rank 0 (any node) drives the loop and samples from node 0's vLLM.
+#     GPUS_PER_NODE on every other node. NO torchrun: one `srun` task per trainer rank
+#     (SLURM_HOSTFILE + --distribution=arbitrary lists node 0 G-TP times, others G times);
+#     each task runs this script in --rank mode, which exports the torchrun-style env
+#       RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS MASTER_ADDR/MASTER_PORT LOCAL_RANK LOCAL_WORLD_SIZE
+#     and execs `python -m lean_rl.train ...` (lean_rl.dist.init_dist reads that env).
+#     LOCAL_RANK is the PHYSICAL GPU index (node 0: TP..G-1, others 0..G-1) and every GPU of
+#     the node stays visible (CUDA_VISIBLE_DEVICES=0..G-1), so cuda:LOCAL_RANK is the rank's GPU.
+#     Global rank 0 (node 0) drives the loop and samples from node 0's vLLM.
 #   - FSDP=1 (-> fsdp=True; do NOT also put fsdp= in EXTRA_ARGS) shards the frozen base across
 #     all trainer ranks.
 #   - preempt_qos caps a user at 24 GPUs total; --nodes x --gres must fit under that.
@@ -49,14 +51,13 @@
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
 # Preemption (Babel: GraceTime=0, KillWait=120 s, so the whole shutdown must fit in 120 s):
-# SIGTERM -> batch shell -> srun -> each node's worker, which sends SIGUSR1 directly to its
-# trainer rank processes (torchelastic would turn SIGTERM into SIGKILL after ~30 s and exit
-# nonzero). Each rank's PreemptionFlag saves a checkpoint at the next step boundary and the
-# ranks exit 0. Worker waits <= 90 s for torchrun, the batch shell <= 100 s for srun; then
-# vLLM is stopped and the script exits with torchrun's rc. A requeued job (same
+# every trainer rank is a Slurm task (python exec'd directly, no torchelastic), so it gets
+# Slurm's SIGTERM itself; the trainer's PreemptionFlag (SIGTERM/SIGUSR1) saves the last
+# completed step and exits 0. The batch shell on TERM forwards it to srun, waits <= 100 s for
+# the step to exit, then stops vLLM and exits with the step's rc. A requeued job (same
 # SLURM_JOB_ID) reuses LOG_DIR and resumes.
 #
-# DRY_RUN=1 prints the topology and per-node commands and launches nothing.
+# DRY_RUN=1 prints the hostfile, per-rank RANK/LOCAL_RANK/GPU mapping and commands; launches nothing.
 
 set -e
 
@@ -132,46 +133,37 @@ build_trainer_args() {
     TRAINER_ARGS+=(${=EXTRA_ARGS})
 }
 
-# Per-node layout: sets NODE_NPROC and NODE_VISIBLE for node index $1 (0-based).
-node_layout() {
-    local n=$1
-    if (( n == 0 )); then
-        NODE_NPROC=$TRAINER_GPUS_NODE0
-        NODE_VISIBLE=${(j:,:)${(f)"$(seq $VLLM_TP_SIZE $((GPUS_PER_NODE-1)))"}}
-    else
-        NODE_NPROC=$GPUS_PER_NODE
-        NODE_VISIBLE=${(j:,:)${(f)"$(seq 0 $((GPUS_PER_NODE-1)))"}}
-    fi
-}
+# Rank layout, in global-rank order (hostfile order). Zsh arrays are 1-indexed: rank r is [r+1].
+RANK_HOST=(); RANK_NODE=(); RANK_GPU=()
+for (( n = 0; n < NNODES; n++ )); do
+    first=$(( n == 0 ? VLLM_TP_SIZE : 0 ))
+    for (( g = first; g < GPUS_PER_NODE; g++ )); do
+        RANK_HOST+=(${HOSTS[$((n+1))]}); RANK_NODE+=($n); RANK_GPU+=($g)
+    done
+done
+WORLD=${#RANK_HOST[@]}
+HOSTFILE="${TMPDIR:-/tmp}/lean-hostfile-${SLURM_JOB_ID}"
+CPUS_PER_RANK=${CPUS_PER_RANK:-2}   # 8 ranks x 2 = the 16 CPUs the header requests per node
 
-torchrun_cmd() {  # $1 = node_rank, $2 = nproc_per_node
-    build_trainer_args
-    TORCHRUN_CMD=(torchrun
-        --nnodes="$NNODES" --node_rank="$1" --nproc_per_node="$2"
-        --rdzv_backend=c10d --rdzv_id="$SLURM_JOB_ID"
-        --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT"
-        -m lean_rl.train "${TRAINER_ARGS[@]}")
-}
-
-if [[ "$1" != "--worker" ]]; then
+if [[ "$1" != "--rank" ]]; then
     VLLM_VISIBLE=${(j:,:)${(f)"$(seq 0 $((VLLM_TP_SIZE-1)))"}}
     echo "[lean] nodes=$NNODES hosts=${HOSTS[*]}"
     echo "[lean] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT VLLM_PORT=$VLLM_PORT"
     echo "[lean] vllm_urls=$VLLM_URLS (node 0 only)  GPUS_PER_NODE=$GPUS_PER_NODE VLLM_TP_SIZE=$VLLM_TP_SIZE"
     echo "[lean] fsdp=$FSDP gpt_oss_lm_head_plugin=$USE_LM_HEAD_PLUGIN LOG_DIR=$LOG_DIR"
     echo "[lean] node 0: vLLM CUDA_VISIBLE_DEVICES=$VLLM_VISIBLE$([[ "$USE_LM_HEAD_PLUGIN" == 1 ]] && echo " VLLM_PLUGINS=lean_rl_gpt_oss_lm_head")"
-    WORLD=0
-    for (( i = 0; i < NNODES; i++ )); do
-        node_layout $i
-        torchrun_cmd $i $NODE_NPROC
-        WORLD=$(( WORLD + NODE_NPROC ))
-        echo "[lean] node $i (${HOSTS[$((i+1))]}): trainer ranks=$NODE_NPROC CUDA_VISIBLE_DEVICES=$NODE_VISIBLE"
-        echo "[lean]   ${TORCHRUN_CMD[*]}"
+    echo "[lean] trainer world size=$WORLD; hostfile $HOSTFILE:"
+    printf '[lean]   %s\n' "${RANK_HOST[@]}"
+    for (( r = 0; r < WORLD; r++ )); do
+        echo "[lean] rank $r: host=${RANK_HOST[$((r+1))]} node=${RANK_NODE[$((r+1))]} LOCAL_RANK=${RANK_GPU[$((r+1))]} (cuda:${RANK_GPU[$((r+1))]})"
     done
-    echo "[lean] trainer world size=$WORLD"
-    SRUN_CMD=(srun --ntasks-per-node=1 --kill-on-bad-exit=1 zsh "$REPO_DIR/slurm/sbatch_lean.sh" --worker)
+    build_trainer_args
+    echo "[lean] per-rank command: RANK=<r> WORLD_SIZE=$WORLD LOCAL_RANK=<gpu> MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT python -m lean_rl.train ${TRAINER_ARGS[*]}"
+    SRUN_CMD=(srun --distribution=arbitrary --ntasks="$WORLD" --kill-on-bad-exit=1 --overlap
+        --gres=gpu:"$GPUS_PER_NODE" --gpu-bind=none --cpus-per-task="$CPUS_PER_RANK"
+        zsh "$REPO_DIR/slurm/sbatch_lean.sh" --rank)
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo "[lean] DRY_RUN srun: ${SRUN_CMD[*]}"
+        echo "[lean] DRY_RUN SLURM_HOSTFILE=$HOSTFILE srun: ${SRUN_CMD[*]}"
         exit 0
     fi
 fi
@@ -194,50 +186,24 @@ export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
 
-# ---- worker: one per node, runs the trainer ranks --------------------------
-if [[ "$1" == "--worker" ]]; then
-    node_layout "$SLURM_NODEID"
-    torchrun_cmd "$SLURM_NODEID" "$NODE_NPROC"
-    export CUDA_VISIBLE_DEVICES="$NODE_VISIBLE"
-    echo "[lean-worker $SLURM_NODEID $(hostname -s)] CUDA_VISIBLE_DEVICES=$NODE_VISIBLE torchrun: ${TORCHRUN_CMD[*]}"
-    # Recursively list descendants of a pid (Linux pgrep -P).
-    descendants() {
-        local c
-        for c in $(pgrep -P "$1" 2>/dev/null); do echo $c; descendants $c; done
-    }
-    # torchrun (and this shell) must survive USR1; ignored dispositions are inherited, and
-    # the trainer's own signal handler replaces the ignore in the rank processes.
-    trap '' USR1
-    on_term() {
-        set +e
-        echo "[lean-worker $SLURM_NODEID] SIGTERM - SIGUSR1 to trainer ranks (checkpoint at step boundary, exit 0)" >&2
-        local pids=($(descendants "$TRAIN_PID"))
-        (( ${#pids} )) && kill -USR1 $pids 2>/dev/null
-        local i
-        for (( i = 0; i < 90; i++ )); do
-            kill -0 "$TRAIN_PID" 2>/dev/null || break
-            sleep 1
-        done
-        if kill -0 "$TRAIN_PID" 2>/dev/null; then
-            echo "[lean-worker $SLURM_NODEID] torchrun still alive after 90 s - TERM" >&2
-            kill -TERM "$TRAIN_PID" 2>/dev/null
-        fi
-        wait "$TRAIN_PID" 2>/dev/null
-        exit $?
-    }
-    trap on_term TERM
-    # New session: a group-wide TERM from srun/slurmstepd must not reach torchelastic.
-    if command -v setsid > /dev/null; then
-        setsid "${TORCHRUN_CMD[@]}" &
+# ---- rank: one srun task per trainer rank ----------------------------------
+if [[ "$1" == "--rank" ]]; then
+    if [[ "$(hostname -s)" == "${HOSTS[1]}" ]]; then
+        first=$VLLM_TP_SIZE; LOCAL_WORLD_SIZE=$TRAINER_GPUS_NODE0
     else
-        "${TORCHRUN_CMD[@]}" &
+        first=0; LOCAL_WORLD_SIZE=$GPUS_PER_NODE
     fi
-    TRAIN_PID=$!
-    wait $TRAIN_PID
-    exit $?
+    export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS
+    export LOCAL_RANK=$(( first + SLURM_LOCALID )) LOCAL_WORLD_SIZE
+    export MASTER_ADDR MASTER_PORT
+    export CUDA_VISIBLE_DEVICES=${(j:,:)${(f)"$(seq 0 $((GPUS_PER_NODE-1)))"}}
+    build_trainer_args
+    echo "[lean-rank $RANK/$WORLD_SIZE $(hostname -s)] LOCAL_RANK=$LOCAL_RANK (cuda:$LOCAL_RANK) CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+    # exec: python is the Slurm task itself and receives SIGTERM directly (PreemptionFlag).
+    exec python -m lean_rl.train "${TRAINER_ARGS[@]}"
 fi
 
-# ---- parent (node 0): vLLM, then srun the workers ---------------------------
+# ---- parent (node 0): vLLM, then srun the ranks ---------------------------
 mkdir -p "$LOG_DIR"
 echo "[lean] LOG_DIR=$LOG_DIR"
 
@@ -255,7 +221,8 @@ stop_vllm() {
 }
 trap stop_vllm EXIT INT
 
-# Preemption: forward TERM to the srun step (trainer saves + exits 0), wait, then stop vLLM.
+# Preemption: ranks get Slurm's SIGTERM themselves (save + exit 0); also forward TERM to srun,
+# wait <= 100 s for the step, then stop vLLM.
 on_term() {
     set +e  # errexit must not abort the handler (wait returns 143 after the kill)
     echo "[lean] SIGTERM (preempted?) - forwarding to the trainer step, then stopping vLLM" >&2
@@ -298,6 +265,8 @@ echo "[lean] vLLM ready"
 export MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN VLLM_TP_SIZE
 export MAX_TOKENS GPUS_PER_NODE FSDP GPT_OSS_LM_HEAD EXTRA_ARGS USE_LM_HEAD_PLUGIN TRAINER_GPUS_NODE0
 export MASTER_ADDR MASTER_PORT VLLM_PORT VLLM_URLS LOG_DIR REPO_DIR
+printf '%s\n' "${RANK_HOST[@]}" > "$HOSTFILE"
+export SLURM_HOSTFILE="$HOSTFILE"
 "${SRUN_CMD[@]}" &
 SRUN_PID=$!
 rc=0

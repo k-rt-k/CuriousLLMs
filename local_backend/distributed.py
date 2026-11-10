@@ -15,6 +15,8 @@ the driver broadcasts:
         all_reduce(grads, SUM)  ◀──────────▶     all_reduce(grads, SUM)
         gather_object(outputs)  ◀───────────     gather_object
     send_command(OPTIM, adam)      ───────▶  _do_optim (identical step)
+    send_command(LOAD_STATE, path) ───────▶  _do_load_and_report(path)
+        gather_object((ok, err))  ◀───────────   (failures reported, never fatal)
     ...
     shutdown_workers               ───────▶  SHUTDOWN → serve_worker returns
 
@@ -139,6 +141,10 @@ class Cmd(enum.Enum):
 def send_command(ctx: DistContext, cmd: Cmd, per_rank_payloads: list[Any]) -> Any:
     """Driver: scatter `(cmd, payload_r)` to every rank; returns the driver's own payload."""
     assert ctx.is_driver, "send_command is driver-only"
+    if ctx.busy:
+        # Workers are still inside the previous command's collectives; a new
+        # scatter would pair with the wrong collective on their side.
+        raise RuntimeError("protocol desynced: previous command did not complete")
     if ctx.shut_down:
         raise RuntimeError(f"send_command({cmd}) after workers were shut down")
     if len(per_rank_payloads) != ctx.world_size:
@@ -195,8 +201,9 @@ def serve_worker(ctx: DistContext, client: "LocalTrainingClient") -> None:
         elif cmd is Cmd.OPTIM:
             client._do_optim(payload)
         elif cmd is Cmd.LOAD_STATE:
-            client._do_load_state(payload)
+            # Errors are reported to the driver by the closing gather, not raised.
+            client._do_load_and_report(client._do_load_state, payload)
         elif cmd is Cmd.LOAD_ADAPTER:
-            client._do_load_adapter(payload)
+            client._do_load_and_report(client._do_load_adapter, payload)
         else:  # pragma: no cover
             raise RuntimeError(f"unknown command {cmd!r}")

@@ -184,18 +184,10 @@ class LocalTrainingClient:
         self.model = get_peft_model(base, lora_cfg)
         self.model.train()
 
-        trainable = [p for p in self.model.parameters() if p.requires_grad]
-        n_train = sum(p.numel() for p in trainable)
+        n_train = sum(p.numel() for p in self._trainable_params())
         logger.info("LoRA trainable parameters: %d", n_train)
 
-        self.optimizer = torch.optim.AdamW(
-            trainable,
-            lr=self._adam_state["lr"],
-            betas=(self._adam_state["beta1"], self._adam_state["beta2"]),
-            eps=self._adam_state["eps"],
-            weight_decay=self._adam_state["weight_decay"],
-        )
-        self.optimizer.zero_grad(set_to_none=True)
+        self._build_optimizer()
 
         if self._dp:
             # Every rank must start from rank 0's LoRA init, whatever its RNG did.
@@ -204,6 +196,21 @@ class LocalTrainingClient:
 
     def _trainable_params(self) -> list[torch.nn.Parameter]:
         return [p for p in self.model.parameters() if p.requires_grad]
+
+    def _build_optimizer(self) -> None:
+        """Fresh AdamW over the *current* trainable params, hyperparams from `_adam_state`.
+
+        Must be called whenever the LoRA param tensors are replaced (adapter
+        delete + reload), otherwise the optimizer keeps stepping orphaned tensors.
+        """
+        self.optimizer = torch.optim.AdamW(
+            self._trainable_params(),
+            lr=self._adam_state["lr"],
+            betas=(self._adam_state["beta1"], self._adam_state["beta2"]),
+            eps=self._adam_state["eps"],
+            weight_decay=self._adam_state["weight_decay"],
+        )
+        self.optimizer.zero_grad(set_to_none=True)
 
     # ------------------------------------------------------------------
     # Tokenizer
@@ -527,7 +534,7 @@ class LocalTrainingClient:
         # storage all ranks can see).
         if self._dp:
             self._check_adapter_dir(path)
-            self._run_command(Cmd.LOAD_STATE, [path] * self.dist.world_size, self._do_load_state)
+            self._dp_load(Cmd.LOAD_STATE, self._do_load_state, path)
         else:
             self._do_load_state(path)
         return LocalFuture(None)
@@ -538,6 +545,37 @@ class LocalTrainingClient:
         if not os.path.exists(cfg):
             raise FileNotFoundError(f"No adapter_config.json found under {path}")
         return cfg
+
+    def _dp_load(self, cmd: Cmd, body, path: str) -> None:
+        """Driver: broadcast a LOAD_* command, load locally, raise if any rank failed."""
+        statuses = self._run_command(
+            cmd,
+            [path] * self.dist.world_size,
+            lambda p: self._do_load_and_report(body, p),
+        )
+        failed = [(r, err) for r, (ok, err) in enumerate(statuses) if not ok]
+        if failed:
+            details = "; ".join(f"rank {r}: {err}" for r, err in failed)
+            raise RuntimeError(
+                f"{cmd.value}({path}) failed on rank(s) {[r for r, _ in failed]}: {details}"
+            )
+
+    def _do_load_and_report(self, body, path: str) -> Optional[list]:
+        """Every rank: attempt `body(path)`, then gather `(ok, err)` on obj_group.
+
+        Never raises, so a failing rank still reaches the closing gather and
+        keeps serving; the driver turns failures into one RuntimeError.
+        Returns the per-rank statuses on the driver, None on workers.
+        """
+        try:
+            body(path)
+            status = (True, None)
+        except Exception as e:
+            logger.exception("rank %d: load of %s failed", self.dist.rank, path)
+            status = (False, f"{type(e).__name__}: {e}")
+        gathered = [None] * self.dist.world_size if self.dist.is_driver else None
+        torch_dist.gather_object(status, gathered, dst=0, group=self.dist.obj_group)
+        return gathered
 
     def _do_load_state(self, path: str) -> None:
         self._check_adapter_dir(path)
@@ -559,6 +597,9 @@ class LocalTrainingClient:
         except Exception:
             pass
 
+        # The reload replaced the LoRA param tensors: rebind the optimizer to the
+        # live ones before restoring its state (else step() updates dead tensors).
+        self._build_optimizer()
         opt_path = os.path.join(path, "optimizer.pt")
         if os.path.exists(opt_path):
             # weights_only=True is safe here: optimizer state is tensors+ints only.
@@ -601,9 +642,7 @@ class LocalTrainingClient:
         async with self._adapter_swap_lock:
             if self._dp:
                 self._validate_adapter(path)  # fail on the driver before involving workers
-                self._run_command(
-                    Cmd.LOAD_ADAPTER, [path] * self.dist.world_size, self._do_load_adapter
-                )
+                self._dp_load(Cmd.LOAD_ADAPTER, self._do_load_adapter, path)
             else:
                 self._do_load_adapter(path)
         return LocalFuture(None)
@@ -651,19 +690,11 @@ class LocalTrainingClient:
         # is fresh. (The previous optimizer was bound to deleted param tensors.)
         # _adam_state retains lr/betas/eps/weight_decay (set by the user via
         # optim_step or by _init_async defaults); only the momentum state resets.
-        trainable = [p for p in self.model.parameters() if p.requires_grad]
-        if not trainable:
+        if not self._trainable_params():
             raise RuntimeError(
                 f"No trainable LoRA params after load_adapter({path}). Adapter may be corrupted."
             )
-        self.optimizer = torch.optim.AdamW(
-            trainable,
-            lr=self._adam_state["lr"],
-            betas=(self._adam_state["beta1"], self._adam_state["beta2"]),
-            eps=self._adam_state["eps"],
-            weight_decay=self._adam_state["weight_decay"],
-        )
-        self.optimizer.zero_grad(set_to_none=True)
+        self._build_optimizer()
         self.step_counter = 0
         self._last_loss_value = None
 

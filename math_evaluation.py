@@ -1003,11 +1003,17 @@ async def main(config: EvalConfig):
     # Setup logging
     log_dir = setup_logging(config.log_path)
 
-    # Create service client (vLLM-backed)
+    if int(os.environ.get("WORLD_SIZE", "1") or "1") > 1:
+        raise RuntimeError(
+            "math_evaluation.py is single-process; run it with python, not torchrun (WORLD_SIZE>1)."
+        )
+
+    # Create service client (vLLM-backed). For the local backend base_url=None lets
+    # it fall back to $VLLM_URLS, then $VLLM_URL.
     logger.info("Initializing local vLLM service client...")
     service_client = make_service_client(
         config.backend,
-        base_url=os.environ.get("VLLM_URL"),
+        base_url=None if config.backend == "local" else os.environ.get("VLLM_URL"),
         log_path=config.log_path,
         model_name=config.model_name,
     )

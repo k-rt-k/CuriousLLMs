@@ -126,11 +126,10 @@ class LocalServiceClient:
 
         if model_path is not None:
             adapter_name = adapter_name or _adapter_name_from_path(model_path)
-            try:
-                load_lora(self.vllm_urls, adapter_name, model_path)
-            except RuntimeError as e:
-                # Already loaded? Best-effort idempotency.
-                logger.warning("load_lora during create_sampling_client raised: %s", e)
+            # _load_one already handles the benign "already loaded" case via
+            # load_inplace, so any RuntimeError here (incl. a partial failure
+            # across servers) is real and must propagate.
+            load_lora(self.vllm_urls, adapter_name, model_path)
 
         return LocalSamplingClient(
             vllm_urls=self.vllm_urls,

@@ -1,12 +1,15 @@
 #!/usr/bin/env zsh
 #SBATCH --job-name=cllm-format
-#SBATCH --partition=general
+#SBATCH --partition=preempt
+#SBATCH --qos=preempt_qos
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --gres=gpu:L40S:1
 #SBATCH --mem=64G
 #SBATCH --time=8:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-%j.out
+#SBATCH --output=/home/ksnair/CuriousLLMs_logs/slurm-%x-%j.out
 #
 # Format SFT (cold-start) stage — DeepSeek-R1 style. Teaches the LoRA the
 # target output format (chat-template + \boxed{answer}) before RL kicks in.
@@ -72,8 +75,13 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-format-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${SLURM_JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-format-$(echo "$MODEL_NAME" | tr '/' '-')
+    else
+        STAMP=$(date +%Y%m%d-%H%M%S)
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-format-$(echo "$MODEL_NAME" | tr '/' '-')
+    fi
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"
@@ -82,7 +90,8 @@ echo "[format] LOG_DIR=$LOG_DIR"
 # --- vLLM ----------------------------------------------------------
 # We still launch vLLM for parity with sbatch_train.sh — it's idle during SFT
 # but lets format_final/ get hot-loaded for a final test sample if desired.
-cd /home/ksnair/worktrees/slurm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 source slurm/launch_vllm.sh
 

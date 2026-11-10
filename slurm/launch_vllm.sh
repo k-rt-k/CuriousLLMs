@@ -13,7 +13,7 @@
 #   LOG_DIR               (required; where vllm.log lives)
 #
 # Outputs (env):
-#   VLLM_URL              http://127.0.0.1:$VLLM_PORT
+#   VLLM_URL              http://$(hostname -f):$VLLM_PORT  (server binds 0.0.0.0)
 #   VLLM_PID              child process id
 
 : "${MODEL_NAME:?MODEL_NAME must be set}"
@@ -35,7 +35,7 @@ if [[ -z "${VLLM_PORT}" ]]; then
     fi
 fi
 export VLLM_PORT
-export VLLM_URL="http://127.0.0.1:${VLLM_PORT}"
+export VLLM_URL="http://$(hostname -f):${VLLM_PORT}"
 
 mkdir -p "$LOG_DIR"
 
@@ -49,6 +49,7 @@ export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 # set VLLM_USE_DEEP_GEMM=0 and VLLM_MOE_USE_DEEP_GEMM=0 before sbatch.
 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_NAME" \
+    --host 0.0.0.0 \
     --port "$VLLM_PORT" \
     --tensor-parallel-size "$VLLM_TP_SIZE" \
     --enable-lora \

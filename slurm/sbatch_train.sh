@@ -1,12 +1,15 @@
 #!/usr/bin/env zsh
 #SBATCH --job-name=cllm-train
-#SBATCH --partition=general
+#SBATCH --partition=preempt
+#SBATCH --qos=preempt_qos
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --gres=gpu:L40S:1
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-%j.out
+#SBATCH --output=/home/ksnair/CuriousLLMs_logs/slurm-%x-%j.out
 #
 # Small-model RL training on Babel (single GPU, co-resident vLLM + trainer).
 #
@@ -58,19 +61,37 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${SLURM_JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    else
+        STAMP=$(date +%Y%m%d-%H%M%S)
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    fi
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"
 echo "[train] LOG_DIR=$LOG_DIR"
 
 # --- vLLM ----------------------------------------------------------
-cd /home/ksnair/worktrees/slurm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 source slurm/launch_vllm.sh
 
 # --- training ------------------------------------------------------
+# Run in the background so a SLURM preemption (SIGTERM) can be forwarded to it
+# and to vLLM. The job is --requeue'd and resumes from LOG_DIR
+# (behavior_if_log_dir_exists=resume; LOG_DIR is stable per SLURM_JOB_ID).
+on_term() {
+    echo "[train] SIGTERM (preempted?) - forwarding to trainer and vLLM" >&2
+    [[ -n "$TRAIN_PID" ]] && kill -TERM "$TRAIN_PID" 2>/dev/null
+    [[ -n "$TRAIN_PID" ]] && wait "$TRAIN_PID" 2>/dev/null
+    cleanup_vllm
+    exit 143
+}
+trap on_term TERM
+
 python math_train.py \
     backend=local \
     model_name="$MODEL_NAME" \
@@ -85,4 +106,6 @@ python math_train.py \
     log_path="$LOG_DIR" \
     behavior_if_log_dir_exists=resume \
     ${INIT_FROM_ADAPTER:+init_from_adapter="$INIT_FROM_ADAPTER"} \
-    ${=EXTRA_ARGS}
+    ${=EXTRA_ARGS} &
+TRAIN_PID=$!
+wait $TRAIN_PID

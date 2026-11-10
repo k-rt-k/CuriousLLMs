@@ -142,3 +142,15 @@ def test_training_client_accepts_str_and_empty():
 
     assert _normalize_urls("http://a:1/") == ["http://a:1"]
     assert _normalize_urls([]) == []
+
+
+def test_create_sampling_client_propagates_load_failure(monkeypatch):
+    from local_backend import LocalServiceClient, service_client
+
+    def boom(urls, name, d):
+        raise RuntimeError("LoRA sync failed on http://b:1: kaboom")
+
+    monkeypatch.setattr(service_client, "load_lora", boom)
+    svc = LocalServiceClient(vllm_urls=["http://a:1", "http://b:1"])
+    with pytest.raises(RuntimeError, match="b:1"):
+        svc.create_sampling_client(model_path="/x/kl", base_model="m")

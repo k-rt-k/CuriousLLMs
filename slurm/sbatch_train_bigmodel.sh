@@ -1,13 +1,16 @@
 #!/usr/bin/env zsh
 #SBATCH --job-name=cllm-train-big
-#SBATCH --partition=general
+#SBATCH --partition=preempt
+#SBATCH --qos=preempt_qos
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --gres=gpu:A100_80GB:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=192G
 #SBATCH --time=48:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-%j.out
+#SBATCH --output=/home/ksnair/CuriousLLMs_logs/slurm-%x-%j.out
 #
 # Big-model RL training (gpt-oss-20b, Llama-3.1-8B-Instruct, etc.).
 #
@@ -16,8 +19,11 @@
 #     (default VLLM_TP_SIZE=2 -> GPUs 0,1).
 #   - Trainer uses the remaining GPUs via CUDA_VISIBLE_DEVICES
 #     (default: the LAST gpu = GPU 3 on a 4-GPU node).
-#   - To put the trainer on multiple GPUs (FSDP), set TRAINER_NUM_GPUS>1 and
-#     prefix math_train.py with `accelerate launch --num_processes=N`.
+#   - To put the trainer on multiple GPUs, set TRAINER_NUM_GPUS>1: the script
+#     then runs `torchrun --standalone --nproc_per_node=N math_train.py` (data
+#     parallel LoRA trainer; rank 0 drives, ranks>0 serve; see local_backend/distributed.py).
+#   - On SIGTERM (SLURM preemption) the trainer and vLLM are terminated; the
+#     requeued job resumes from the same LOG_DIR.
 #
 # Override defaults via the environment when sbatch'ing:
 #   sbatch --export=ALL,MODEL_NAME=openai/gpt-oss-20b,LORA_RANK=16,VLLM_TP_SIZE=2 \
@@ -50,8 +56,13 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${SLURM_JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    else
+        STAMP=$(date +%Y%m%d-%H%M%S)
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    fi
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"
@@ -70,7 +81,8 @@ VLLM_VISIBLE=$(seq -s, 0 $((VLLM_TP_SIZE-1)))
 TRAINER_VISIBLE=$(seq -s, $VLLM_TP_SIZE $((VLLM_TP_SIZE+TRAINER_NUM_GPUS-1)))
 echo "[train-big] vLLM GPUs=$VLLM_VISIBLE  trainer GPUs=$TRAINER_VISIBLE"
 
-cd /home/ksnair/worktrees/slurm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 
 # --- vLLM in a subshell with restricted CUDA_VISIBLE_DEVICES -------
@@ -84,7 +96,19 @@ export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
     wait $VLLM_PID
 ) &
 VLLM_BG_PID=$!
-trap "kill $VLLM_BG_PID 2>/dev/null; pkill -P $VLLM_BG_PID 2>/dev/null" EXIT INT TERM
+stop_vllm() {
+    kill "$VLLM_BG_PID" 2>/dev/null
+    pkill -P "$VLLM_BG_PID" 2>/dev/null
+}
+on_term() {
+    echo "[train-big] SIGTERM (preempted?) - forwarding to trainer and vLLM" >&2
+    [[ -n "$TRAIN_PID" ]] && kill -TERM "$TRAIN_PID" 2>/dev/null
+    [[ -n "$TRAIN_PID" ]] && wait "$TRAIN_PID" 2>/dev/null
+    stop_vllm
+    exit 143
+}
+trap stop_vllm EXIT INT
+trap on_term TERM
 
 # Wait for vLLM /health (the subshell's port is deterministic from SLURM_JOB_ID)
 if [[ -n "${SLURM_JOB_ID}" ]]; then
@@ -110,12 +134,15 @@ done
 export CUDA_VISIBLE_DEVICES="$TRAINER_VISIBLE"
 
 if (( TRAINER_NUM_GPUS > 1 )); then
-    LAUNCHER="accelerate launch --num_processes=$TRAINER_NUM_GPUS --num_machines=1 --mixed_precision=bf16"
+    # vLLM is on separate GPUs, so the trainer may use the whole of its own GPUs.
+    export LOCAL_TRAINER_GPU_MEM_FRAC=1.0
+    LAUNCHER=(torchrun --standalone --nproc_per_node="$TRAINER_NUM_GPUS")
 else
-    LAUNCHER="python"
+    LAUNCHER=(python)
 fi
 
-$LAUNCHER math_train.py \
+# Background + wait so the TERM trap can forward preemption to torchrun/python.
+"${LAUNCHER[@]}" math_train.py \
     backend=local \
     model_name="$MODEL_NAME" \
     lora_rank="$LORA_RANK" \
@@ -129,4 +156,6 @@ $LAUNCHER math_train.py \
     log_path="$LOG_DIR" \
     behavior_if_log_dir_exists=resume \
     ${INIT_FROM_ADAPTER:+init_from_adapter="$INIT_FROM_ADAPTER"} \
-    ${=EXTRA_ARGS}
+    ${=EXTRA_ARGS} &
+TRAIN_PID=$!
+wait $TRAIN_PID

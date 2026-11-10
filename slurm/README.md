@@ -91,6 +91,20 @@ git submodule update --init --recursive
 
 ## Submitting jobs
 
+All scripts run on the preemptible partition (`--partition=preempt --qos=preempt_qos --requeue
+--open-mode=append`). SLURM opens the `#SBATCH --output` file before the script runs, so create its
+directory once before the first `sbatch`:
+
+```bash
+mkdir -p /home/ksnair/CuriousLLMs_logs
+```
+
+Scripts `cd` to `$REPO_DIR` (default: `$SLURM_SUBMIT_DIR`, else `/home/ksnair/worktrees/slurm`).
+Under SLURM, the default `LOG_DIR` is derived from `SLURM_JOB_ID` only (no timestamp), so a requeued
+job resumes into the same directory (`behavior_if_log_dir_exists=resume`). On preemption (SIGTERM)
+`sbatch_train.sh` / `sbatch_train_bigmodel.sh` forward the signal to the trainer and vLLM and exit
+non-zero.
+
 ### Small-model training (Llama-3B, Qwen-7B, etc., co-resident on one GPU)
 
 ```bash
@@ -163,6 +177,19 @@ dataset, applies the model's chat template, and builds response-masked Datums
 sbatch --export=ALL,MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct \
        slurm/sbatch_train_bigmodel.sh
 ```
+
+Multi-GPU trainer (single node): vLLM takes `VLLM_TP_SIZE` GPUs, the trainer takes the next
+`TRAINER_NUM_GPUS` and runs under `torchrun --standalone --nproc_per_node=$TRAINER_NUM_GPUS`
+(data-parallel LoRA; rank 0 drives, other ranks serve; requires `backend=local`):
+
+```bash
+sbatch --gres=gpu:A100_80GB:4 \
+       --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-1B,VLLM_TP_SIZE=2,TRAINER_NUM_GPUS=2 \
+       slurm/sbatch_train_bigmodel.sh
+```
+
+`math_evaluation.py` stays single-process (it errors if `WORLD_SIZE>1`) and reads `$VLLM_URLS`
+(comma-separated), then `$VLLM_URL`, for the local backend.
 
 ## Memory rules of thumb
 

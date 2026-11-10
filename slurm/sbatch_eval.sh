@@ -1,12 +1,15 @@
 #!/usr/bin/env zsh
 #SBATCH --job-name=cllm-eval
-#SBATCH --partition=general
+#SBATCH --partition=preempt
+#SBATCH --qos=preempt_qos
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --gres=gpu:L40S:1
 #SBATCH --mem=48G
 #SBATCH --time=4:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kartiknsree@gmail.com
-#SBATCH --output=/data/hf_cache/ksnair/CuriousLLMs_logs/slurm-eval-%j.out
+#SBATCH --output=/home/ksnair/CuriousLLMs_logs/slurm-%x-%j.out
 #
 # Eval-only sbatch: launches vLLM, runs math_evaluation.py.
 
@@ -30,14 +33,20 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    STAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/eval-${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${SLURM_JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/eval-${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    else
+        STAMP=$(date +%Y%m%d-%H%M%S)
+        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/eval-${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+    fi
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"
 echo "[eval] LOG_DIR=$LOG_DIR"
 
-cd /home/ksnair/worktrees/slurm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 source slurm/launch_vllm.sh
 

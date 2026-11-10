@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Literal, Tuple
 
@@ -12,6 +13,7 @@ from tinker_cookbook.recipes.math_rl import (
 from curiosity_train import AsyncConfig, Config, main
 from tinker_cookbook.rl.types import RLDatasetBuilder
 import math_grade
+from local_backend.distributed import get_context, init_distributed, shutdown_workers
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +269,52 @@ async def cli_main(cli_config: CLIConfig):
     await main(config)
 
 
+async def run_worker_if_needed(cli_config: CLIConfig) -> bool:
+    """Under torchrun, ranks > 0 serve the driver's commands instead of running cli_main.
+
+    Initialises torch.distributed (idempotent; a no-op when WORLD_SIZE is unset or 1).
+    Returns True if this process was a worker and has finished (caller should exit).
+    Rank 0 reaches `LocalServiceClient`, which picks up the same process-global context.
+    """
+    world_size = int(os.environ.get("WORLD_SIZE", "1") or "1")
+    if cli_config.backend == "tinker":
+        if world_size > 1:
+            raise ValueError(
+                f"WORLD_SIZE={world_size} requires backend=local; backend=tinker is single-process."
+            )
+        return False
+    ctx = init_distributed()
+    if ctx is None or ctx.is_driver:
+        return False
+
+    import torch
+    from local_backend.distributed import serve_worker
+    from local_backend.training_client import LocalTrainingClient
+
+    kwargs = {} if torch.cuda.is_available() else {"device": "cpu"}
+    client = LocalTrainingClient(
+        base_model=cli_config.model_name,
+        lora_rank=cli_config.lora_rank,
+        vllm_urls=[],
+        dist=ctx,
+        log_path=cli_config.log_path,
+        **kwargs,
+    )
+    await client._init_async()
+    serve_worker(ctx, client)
+    return True
+
+
+async def _entry(cli_config: CLIConfig):
+    if await run_worker_if_needed(cli_config):
+        return
+    try:
+        await cli_main(cli_config)
+    finally:
+        # Releases the workers whether the driver finished or failed (no-op if single-process).
+        shutdown_workers(get_context())
+
+
 if __name__ == "__main__":
     cli_config = chz.entrypoint(CLIConfig)
-    asyncio.run(cli_main(cli_config))
+    asyncio.run(_entry(cli_config))

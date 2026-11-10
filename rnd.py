@@ -997,7 +997,7 @@ class SemanticRND(nn.Module):
         self,
         problems: List[str],
         responses: List[str],
-        response_batch_size: int = 64# 205
+        response_batch_size: int = 32# 205
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encode problems and responses separately for buffer-based training.

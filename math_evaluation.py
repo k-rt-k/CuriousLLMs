@@ -25,7 +25,7 @@ import numpy as np
 import tinker
 from datasets import load_dataset
 
-from local_backend import LocalServiceClient
+from local_backend.backend import make_service_client
 from rich.console import Console
 from rich.table import Table
 
@@ -823,6 +823,8 @@ class EvaluatorConfig:
 class EvalConfig:
     """Configuration for multi-evaluator evaluation."""
 
+    backend: Literal["tinker", "local"] = "tinker"
+
     # model_path: str | None = "tinker://a95b9543-d0b1-46c7-a5ab-7baa62d92906/sampler_weights/final"
     model_path: str | None = None
     # model_name: str = "Qwen/Qwen3-30B-A3B"
@@ -1003,10 +1005,11 @@ async def main(config: EvalConfig):
 
     # Create service client (vLLM-backed)
     logger.info("Initializing local vLLM service client...")
-    service_client = LocalServiceClient(
-        vllm_url=os.environ.get("VLLM_URL"),
+    service_client = make_service_client(
+        config.backend,
+        base_url=os.environ.get("VLLM_URL"),
         log_path=config.log_path,
-        base_model_name=config.model_name,
+        model_name=config.model_name,
     )
 
     # Create sampling client

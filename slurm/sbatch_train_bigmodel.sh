@@ -116,6 +116,7 @@ else
 fi
 
 $LAUNCHER math_train.py \
+    backend=local \
     model_name="$MODEL_NAME" \
     lora_rank="$LORA_RANK" \
     group_size="$GROUP_SIZE" \

@@ -22,7 +22,7 @@ import chz
 import numpy as np
 import tinker
 import torch
-from local_backend import LocalServiceClient
+from local_backend.backend import make_service_client
 from tinker_cookbook import checkpoint_utils
 from tinker_cookbook.completers import TinkerTokenCompleter
 from tinker_cookbook.display import colorize_example
@@ -667,6 +667,8 @@ class Config:
     load_checkpoint_path: str | None = None
     # Warm-start: load only adapter weights, leave optimizer/RNG/step_counter fresh.
     init_from_adapter: str | None = None
+    # Which service backend to use: Tinker (network) or local (vLLM + HF/PEFT).
+    backend: Literal["tinker", "local"] = "tinker"
 
     async_config: AsyncConfig | None = None
     stream_minibatch_config: StreamMinibatchConfig | None = None
@@ -1488,6 +1490,26 @@ async def prepare_minibatch(
         metrics["reasoning/warmup_active"] = 1
     # END SEMANTIC_RND CODE
 
+    # BEGIN ENTROPY_BONUS CODE
+    # Compute and apply entropy bonus to training rewards (independent of RND)
+    # This encourages exploration by rewarding higher entropy (more diverse) responses
+    if entropy_bonus_coef is not None and entropy_bonus_coef > 0.0:
+        with timed("compute_entropy_bonus", metrics):
+            entropy_bonuses_P = compute_entropy_bonus(trajectory_groups_P)
+
+            # Apply entropy bonus to final_rewards_G (actual training rewards)
+            for traj_group, bonuses_G in zip(trajectory_groups_P, entropy_bonuses_P):
+                for i, bonus in enumerate(bonuses_G):
+                    traj_group.final_rewards_G[i] += entropy_bonus_coef * bonus
+
+            # Compute metrics
+            all_bonuses = [b for bonuses_G in entropy_bonuses_P for b in bonuses_G]
+            metrics["entropy/bonus_mean"] = float(np.mean(all_bonuses))
+            metrics["entropy/bonus_std"] = float(np.std(all_bonuses))
+            metrics["entropy/bonus_coef"] = entropy_bonus_coef
+            logger.info(f"Applied entropy bonus: mean={np.mean(all_bonuses):.4f}, coef={entropy_bonus_coef}")
+    # END ENTROPY_BONUS CODE
+
     # BEGIN SEMANTIC_RND CODE
     # Buffer-based RND training with stratified normalization
     # 1. Extract problems (B) and responses (B*G) separately
@@ -1523,20 +1545,8 @@ async def prepare_minibatch(
             for traj_group in trajectory_groups_P:
                 extrinsic_rewards_BG.extend(traj_group.get_total_rewards())
             extrinsic_rewards_BG = torch.tensor(extrinsic_rewards_BG, device=novelty_model.device)
-            
-            if entropy_bonus_coef is not None and entropy_bonus_coef > 0.0:
-                # Compute entropy bonuses and add to extrinsic rewards
-                entropy_bonuses_P = compute_entropy_bonus(trajectory_groups_P)
-                entropy_bonuses_BG = []
-                for bonuses_G in entropy_bonuses_P:
-                    entropy_bonuses_BG.extend(bonuses_G)
-                entropy_bonuses_BG = torch.tensor(entropy_bonuses_BG, device=novelty_model.device)
-                
-                # Scale and add entropy bonuses
-                extrinsic_rewards_BG += entropy_bonus_coef * entropy_bonuses_BG
-                
-                metrics["entropy/bonus_mean"] = float(torch.mean(entropy_bonuses_BG).item())
-                metrics["entropy/bonus_std"] = float(torch.std(entropy_bonuses_BG).item())
+            # Note: Entropy bonus is now applied before this block and is already included
+            # in final_rewards_G (and thus in get_total_rewards())
 
             # Encode problems and responses separately
             problem_embeddings_B, response_embeddings_BG = novelty_model.encode_problems_responses_separately(
@@ -2116,10 +2126,21 @@ async def do_sync_training(
 
 
 @scope
+def validate_backend_config(cfg) -> None:
+    """Reject option combinations the selected backend cannot honor."""
+    backend = getattr(cfg, "backend", "tinker")
+    if backend == "tinker" and getattr(cfg, "init_from_adapter", None):
+        raise ValueError(
+            "init_from_adapter is only supported with backend=local "
+            "(Tinker has no adapter-only warm start)."
+        )
+
+
 async def main(
     cfg: Config,
 ):
     """Main training loop for MDP RL."""
+    validate_backend_config(cfg)
     # tinker-cookbook 0.x dropped wandb_entity from setup_logging — pass via WANDB_ENTITY env if needed.
     if cfg.wandb_entity:
         os.environ.setdefault("WANDB_ENTITY", cfg.wandb_entity)
@@ -2216,10 +2237,11 @@ async def main(
             "(optimizer + RNG + step counter); init_from_adapter is a fresh-optimizer warm-start."
         )
 
-    service_client = LocalServiceClient(
-        vllm_url=cfg.base_url or os.environ.get("VLLM_URL"),
+    service_client = make_service_client(
+        cfg.backend,
+        base_url=cfg.base_url,
         log_path=cfg.log_path,
-        base_model_name=cfg.model_name,
+        model_name=cfg.model_name,
     )
     training_client = await service_client.create_lora_training_client_async(
         cfg.model_name, rank=cfg.lora_rank

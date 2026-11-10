@@ -47,6 +47,7 @@ if [[ -n "${MODEL_PATH}" ]]; then
 fi
 
 python math_evaluation.py \
+    backend=local \
     --model_name "$MODEL_NAME" \
     --log_path "$LOG_DIR" \
     $EXTRA_MODEL_PATH \

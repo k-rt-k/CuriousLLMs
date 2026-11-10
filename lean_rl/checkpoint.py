@@ -82,18 +82,28 @@ def save_checkpoint(
 ) -> str:
     """Atomically write the step checkpoint and prune to the newest ``keep``.
 
-    Non-main ranks return the would-be path without writing (safe to call on all ranks).
+    Multi-rank: call on ALL ranks. Every rank takes part in ``trainer.save_adapter`` and
+    ``trainer.state_dict_for_ckpt`` (collectives under FSDP); only ``is_main`` writes files,
+    renames and prunes. A final barrier keeps the other ranks from racing ahead (e.g. into
+    ``load_latest``) before the checkpoint is in place. Returns the final path on every rank.
     """
+    from lean_rl.dist import barrier
+
     final = os.path.join(_ckpt_root(log_path), f"step_{step:06d}")
-    if not is_main:
-        return final
     tmp = final + ".tmp"
-    os.makedirs(_ckpt_root(log_path), exist_ok=True)
-    if os.path.exists(tmp):
-        shutil.rmtree(tmp)
-    os.makedirs(tmp)
-    trainer.save_adapter(os.path.join(tmp, "adapter"))
-    torch.save(trainer.state_dict_for_ckpt(), os.path.join(tmp, "optimizer.pt"))
+    if is_main:
+        os.makedirs(_ckpt_root(log_path), exist_ok=True)
+        if os.path.exists(tmp):
+            shutil.rmtree(tmp)
+        os.makedirs(tmp)
+    trainer.save_adapter(os.path.join(tmp, "adapter"))  # writes on the trainer's main rank only
+    trainer_state = trainer.state_dict_for_ckpt()
+    if not is_main:
+        del trainer_state
+        barrier()
+        return final
+    torch.save(trainer_state, os.path.join(tmp, "optimizer.pt"))
+    del trainer_state
     torch.save(_rng_state(), os.path.join(tmp, "rng.pt"))
     if rnd_state is not None:
         torch.save(rnd_state, os.path.join(tmp, "rnd.pt"))
@@ -105,6 +115,7 @@ def save_checkpoint(
     os.replace(tmp, final)
     for _, path in _list_steps(log_path)[: -max(keep, 1)]:
         shutil.rmtree(path, ignore_errors=True)
+    barrier()
     return final
 
 
@@ -118,7 +129,9 @@ def load_latest(log_path: str) -> tuple[str, LoopState] | None:
 
 
 def restore_checkpoint(path: str, trainer: "Trainer", *, restore_rng: bool = True) -> dict | None:
-    """Load trainer state (and this process's RNG) from ``path``; returns rnd_state or None."""
+    """Load trainer state (and this process's RNG) from ``path``; returns rnd_state or None.
+
+    Multi-rank: call on ALL ranks (each reads the same files; ``Trainer.load_ckpt_state``)."""
     trainer.load_ckpt_state(torch.load(os.path.join(path, "optimizer.pt"), weights_only=False))
     if restore_rng:
         _set_rng_state(torch.load(os.path.join(path, "rng.pt"), weights_only=False))

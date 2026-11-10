@@ -1,7 +1,9 @@
 """The lean local RL loop: vLLM rollouts -> reward shaping -> KL -> Trainer step -> LoRA hot-swap.
 
-SPMD layout (``WORLD_SIZE > 1``): every rank builds a ``Trainer`` and calls ``trainer.logprobs`` /
-``trainer.train_step`` / ``save_checkpoint`` in the same order. Only rank 0 samples from vLLM,
+SPMD layout (``WORLD_SIZE > 1``): every rank builds a ``Trainer`` and makes every trainer call
+(``logprobs``, ``train_step``, ``save_adapter``, ``snapshot_init_adapter``, ``load_adapter``,
+``restore_checkpoint`` / ``save_checkpoint``) in the same order -- see the contract in
+``lean_rl.trainer``. Only rank 0 samples from vLLM,
 shapes rewards (Gemini judge, SemanticRND on rank 0's GPU), syncs the adapter, evaluates, logs
 and writes checkpoints; it broadcasts the assembled ``list[tinker.Datum]`` to the other ranks.
 
@@ -322,13 +324,16 @@ class _Loop:
             logger.info(f"Saved checkpoint for step {step} at {path}")
 
     def _sync_adapter(self, step: int) -> None:
-        """Rank 0: write the current adapter and hot-swap it into every vLLM server."""
+        """All ranks: write the current adapter (rank 0 writes; FSDP gathers on every rank);
+        rank 0 then hot-swaps it into every vLLM server."""
         from local_backend.weight_sync import sync_lora_to_vllm
 
         root = os.path.join(self.cfg.log_path, "serving_adapter")
         path = os.path.join(root, f"step_{step:06d}")
         name = f"lean_step_{step:06d}"
-        self.trainer.save_adapter(path)
+        self.trainer.save_adapter(path)  # collective under FSDP
+        if not self.r.is_main:
+            return
         sync_lora_to_vllm(path, name, self.cfg.vllm_urls, prev_name=self.sampling_client.adapter_name)
         self.sampling_client.adapter_name = name
         for d in os.listdir(root):  # vLLM has loaded the new one; older dirs are unused
@@ -401,8 +406,8 @@ class _Loop:
             self.trainer.snapshot_init_adapter()  # KL reference for kl_reference=init
             logger.info(f"Warm-started adapter from {cfg.init_from_adapter} (fresh optimizer)")
         # (On resume the init snapshot comes back from the checkpoint.)
-        if is_main and (found is not None or cfg.init_from_adapter):
-            self._sync_adapter(start)  # vLLM must sample from the restored / warm-start policy
+        if found is not None or cfg.init_from_adapter:
+            self._sync_adapter(start)  # all ranks (save_adapter is collective under FSDP)  # vLLM must sample from the restored / warm-start policy
         if start >= n_total:
             logger.info(f"Nothing to do: step {start} >= {n_total} batches")
             return
@@ -503,7 +508,7 @@ class _Loop:
 
         # Safe point 2: the step is complete; save it and stop if preempted.
         preempt = self.comm.agree(self.flag.requested)
-        if is_main and not preempt:
+        if not preempt:  # all ranks: save_adapter is collective under FSDP
             with timed("sync_adapter", metrics):
                 self._sync_adapter(step)
         if is_main:

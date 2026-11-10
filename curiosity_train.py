@@ -1306,6 +1306,29 @@ def compute_entropy_bonus(trajectory_groups_P: list[TrajectoryGroup]) -> list[li
     return entropy_bonuses_P
 
 
+def apply_entropy_bonus(
+    trajectory_groups_P: list[TrajectoryGroup],
+    coef: float | None,
+    metrics: dict[str, Any],
+) -> None:
+    """Add coef * entropy bonus to each trajectory's final_rewards_G in place; no-op if coef is None or <= 0."""
+    if coef is None or coef <= 0.0:
+        return
+    # The bonus uses sampler logprobs and assumes sampling temperature 1.0.
+    with timed("compute_entropy_bonus", metrics):
+        entropy_bonuses_P = compute_entropy_bonus(trajectory_groups_P)
+        for traj_group, bonuses_G in zip(trajectory_groups_P, entropy_bonuses_P):
+            for i, bonus in enumerate(bonuses_G):
+                traj_group.final_rewards_G[i] += coef * bonus
+
+        all_bonuses = [b for bonuses_G in entropy_bonuses_P for b in bonuses_G]
+        mean = float(np.mean(all_bonuses)) if all_bonuses else 0.0
+        metrics["entropy/bonus_mean"] = mean
+        metrics["entropy/bonus_std"] = float(np.std(all_bonuses)) if all_bonuses else 0.0
+        metrics["entropy/bonus_coef"] = coef
+        logger.info(f"Applied entropy bonus: mean={mean:.4f}, coef={coef}")
+
+
 @scope
 async def prepare_minibatch(
     env_group_builders_P: Sequence[EnvGroupBuilder],
@@ -1500,23 +1523,8 @@ async def prepare_minibatch(
     # END SEMANTIC_RND CODE
 
     # BEGIN ENTROPY_BONUS CODE
-    # Compute and apply entropy bonus to training rewards (independent of RND)
-    # This encourages exploration by rewarding higher entropy (more diverse) responses
-    if entropy_bonus_coef is not None and entropy_bonus_coef > 0.0:
-        with timed("compute_entropy_bonus", metrics):
-            entropy_bonuses_P = compute_entropy_bonus(trajectory_groups_P)
-
-            # Apply entropy bonus to final_rewards_G (actual training rewards)
-            for traj_group, bonuses_G in zip(trajectory_groups_P, entropy_bonuses_P):
-                for i, bonus in enumerate(bonuses_G):
-                    traj_group.final_rewards_G[i] += entropy_bonus_coef * bonus
-
-            # Compute metrics
-            all_bonuses = [b for bonuses_G in entropy_bonuses_P for b in bonuses_G]
-            metrics["entropy/bonus_mean"] = float(np.mean(all_bonuses))
-            metrics["entropy/bonus_std"] = float(np.std(all_bonuses))
-            metrics["entropy/bonus_coef"] = entropy_bonus_coef
-            logger.info(f"Applied entropy bonus: mean={np.mean(all_bonuses):.4f}, coef={entropy_bonus_coef}")
+    # Applied to final_rewards_G (independent of RND), before the RND block and compute_advantages
+    apply_entropy_bonus(trajectory_groups_P, entropy_bonus_coef, metrics)
     # END ENTROPY_BONUS CODE
 
     # BEGIN SEMANTIC_RND CODE

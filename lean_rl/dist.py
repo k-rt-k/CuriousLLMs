@@ -47,7 +47,7 @@ def init_dist() -> DistInfo | None:
     ``$LEAN_DIST_TIMEOUT_S`` (default 14400 s); it is also the backstop if a peer dies.
     """
     global _INFO, _OBJ_GROUP
-    if _INFO is not None:
+    if _INFO is not None and tdist.is_initialized():
         return _INFO
     world_size = int(os.environ.get("WORLD_SIZE", "1") or "1")
     if world_size <= 1:

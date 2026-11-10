@@ -12,6 +12,7 @@ needing more ranks than GPUs are skipped.
 
 from __future__ import annotations
 
+import math
 import os
 import socket
 import sys
@@ -26,6 +27,7 @@ tinker = pytest.importorskip("tinker")
 ROOT = Path(__file__).resolve().parents[2]
 DEVICE = os.environ.get("DIST_TEST_DEVICE", "cpu")
 ATOL = float(os.environ.get("DIST_TEST_ATOL", "1e-5"))
+BF16_ATOL = 2e-2
 LENGTHS = [3, 11, 5, 8, 4, 7]
 MICRO_BATCH_TOKENS = 24
 ADAM = dict(learning_rate=1e-3, beta1=0.9, beta2=0.95, eps=1e-8)
@@ -80,6 +82,8 @@ def _proc(rank, world_size, port, model_dir, out_dir, fsdp):
 
     info = init_dist()
     assert (info is None) == (world_size == 1)
+    if fsdp and rank > 0:
+        _forbid_weight_loading()
     torch.manual_seed(100 + rank)  # replicas agree only via the rank-0 init broadcast
     tr = Trainer(
         model_dir, rank=4, device=device_for(info) if DEVICE == "cuda" else "cpu",
@@ -90,6 +94,8 @@ def _proc(rank, world_size, port, model_dir, out_dir, fsdp):
         from torch.distributed.tensor import DTensor
 
         assert all(isinstance(p, DTensor) for p in tr.model.parameters())
+        assert all(p.to_local().device.type != "meta" for p in tr.model.parameters())
+        assert all(b.device.type != "meta" for b in tr.model.buffers())
     # Same nonzero lora_B on every rank so lora_A gets gradient too.
     full = tr._lora_full()
     g = torch.Generator().manual_seed(7)
@@ -137,6 +143,54 @@ def _proc(rank, world_size, port, model_dir, out_dir, fsdp):
         assert out["lp5"] is None
         # Replicas / shards agree with rank 0 (rank 0's file is compared in the tests).
         torch.save({"state3b": out["state3b"]}, os.path.join(out_dir, f"ws{world_size}_r{rank}.pt"))
+
+
+def _forbid_weight_loading():
+    """FSDP ranks > 0 must never materialise the full checkpoint (they build on meta)."""
+    from transformers import AutoModelForCausalLM
+
+    def boom(*a, **k):
+        raise AssertionError("rank > 0 called from_pretrained under FSDP")
+
+    AutoModelForCausalLM.from_pretrained = boom
+
+
+def _proc_bf16(rank, world_size, port, model_dir, out_dir, fsdp):
+    """Production dtype path: bf16 frozen base, fp32 LoRA (FSDP: param_dtype=bf16)."""
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), WORLD_SIZE=str(world_size),
+        RANK=str(rank), LOCAL_RANK=str(rank),
+    )
+    os.environ.setdefault("GLOO_SOCKET_IFNAME", "lo")
+    torch.set_num_threads(1)
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "tinker-cookbook"))
+    from lean_rl.dist import device_for, init_dist
+    from lean_rl.trainer import Trainer
+
+    info = init_dist()
+    if fsdp and rank > 0:
+        _forbid_weight_loading()
+    torch.manual_seed(100 + rank)
+    tr = Trainer(
+        model_dir, rank=4, device=device_for(info) if DEVICE == "cuda" else "cpu",
+        dtype=torch.bfloat16, dist=info, fsdp=fsdp, micro_batch_tokens=MICRO_BATCH_TOKENS,
+    )
+    assert tr.fsdp == (fsdp and world_size > 1)
+    assert all(p.dtype == torch.float32 for _, p in tr._named_lora())
+    full = tr._lora_full()
+    g = torch.Generator().manual_seed(7)
+    for n in sorted(full):
+        if "lora_B" in n:
+            full[n] = 0.05 * torch.randn(full[n].shape, generator=g)
+    tr._lora_assign(full)
+    data = _make_data()
+    out = {"lp0": tr.logprobs(data, "policy")}
+    out["m"] = tr.train_step(data, "ppo", tinker.AdamParams(**ADAM, grad_clip_norm=1.0))
+    out["lp1"] = tr.logprobs(data, "policy")
+    assert all(p.dtype == torch.float32 for _, p in tr._named_lora())
+    if rank == 0:
+        torch.save(out, os.path.join(out_dir, f"bf16_ws{world_size}.pt"))
 
 
 _CACHE: dict = {}
@@ -256,3 +310,27 @@ def test_save_adapter_under_fsdp_loads_in_single_rank(runs, fsdp, tiny_model_dir
     _same_list(tr.logprobs(_make_data(), "policy"), two["lp_after"])
     # ... and the multi-rank trainer reloads its own adapter exactly.
     _same_list(two["lp_loaded"], two["lp_after"], atol=1e-6)
+
+
+@pytest.mark.parametrize("fsdp", [False, True], ids=["replicated", "fsdp"])
+def test_bf16_base_fp32_lora(tiny_model_dir, tmp_path, fsdp):
+    """bf16 base / fp32 LoRA runs; 2-rank logprobs and metrics track 1 rank within bf16 noise."""
+    res = {}
+    for ws in (1, 2):
+        if DEVICE == "cuda" and ws > torch.cuda.device_count():
+            pytest.skip(f"needs {ws} GPUs")
+        mp.spawn(_proc_bf16, args=(ws, _free_port(), tiny_model_dir, str(tmp_path), fsdp and ws > 1),
+                 nprocs=ws, join=True)
+        res[ws] = torch.load(tmp_path / f"bf16_ws{ws}.pt", weights_only=False)
+    one, two = res[1], res[2]
+    # Before the step only the LoRA compute dtype differs (FSDP param_dtype=bf16 vs PEFT's
+    # fp32 LoRA): ~1e-2. After one AdamW step the per-element normalisation turns bf16 noise
+    # in tiny grads into lr-sized weight differences, so allow more (observed 0.077 on CPU).
+    for key, atol in (("lp0", BF16_ATOL), ("lp1", 0.15)):
+        for a, b in zip(one[key], two[key]):
+            assert torch.isfinite(b).all()
+            torch.testing.assert_close(b, a, atol=atol if fsdp else 1e-5, rtol=0)
+    for k in ("loss", "grad_norm"):
+        assert math.isfinite(two["m"][k])
+        assert abs(two["m"][k] - one["m"][k]) <= 0.05 * max(1.0, abs(one["m"][k])), k
+    assert two["m"]["response_tokens"] == one["m"]["response_tokens"]

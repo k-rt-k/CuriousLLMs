@@ -49,7 +49,13 @@ import torch.distributed as tdist
 import torch.nn as nn
 from torch.distributed.tensor import DTensor, distribute_tensor
 from torch.utils.checkpoint import checkpoint
-from peft import PeftConfig, get_peft_model, load_peft_weights, set_peft_model_state_dict
+from peft import (
+    PeftConfig,
+    get_peft_model,
+    get_peft_model_state_dict,
+    load_peft_weights,
+    set_peft_model_state_dict,
+)
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lean_rl import dist as ldist
@@ -180,10 +186,24 @@ class Trainer:
             # HF gpt-oss needs eager attention for its attention sinks.
             model_type = getattr(AutoConfig.from_pretrained(base_model), "model_type", "")
             attn_implementation = "eager" if model_type == "gpt_oss" else "sdpa"
-        # FSDP: build on CPU; fully_shard moves each layer's shards to the device.
-        base = AutoModelForCausalLM.from_pretrained(
-            base_model, torch_dtype=dtype, attn_implementation=attn_implementation
-        ).to("cpu" if fsdp else device)
+        # Weight staging (bounded host RAM):
+        # - FSDP: only rank 0 materialises the checkpoint (on CPU); other ranks build on the
+        #   meta device. After fully_shard, rank 0's full state (base weights AND its LoRA
+        #   init) is broadcast and each rank keeps its shard (_load_fsdp_from_rank0).
+        # - Replicated / single on CUDA: load straight onto the GPU (no CPU copy).
+        full_sd: dict[str, torch.Tensor] | None = None
+        load_kw = dict(torch_dtype=dtype, attn_implementation=attn_implementation)
+        if fsdp and not dist.is_main:
+            with torch.device("meta"):
+                base = AutoModelForCausalLM.from_config(
+                    AutoConfig.from_pretrained(base_model), **load_kw
+                )
+        elif fsdp:
+            base = AutoModelForCausalLM.from_pretrained(base_model, low_cpu_mem_usage=True, **load_kw)
+        elif torch.device(device).type == "cuda":
+            base = AutoModelForCausalLM.from_pretrained(base_model, device_map={"": device}, **load_kw)
+        else:
+            base = AutoModelForCausalLM.from_pretrained(base_model, **load_kw).to(device)
         for p in base.parameters():
             p.requires_grad = False
         if getattr(base.config, "final_logit_softcapping", None):
@@ -206,11 +226,15 @@ class Trainer:
         self._lm_head = inner.get_output_embeddings()  # PEFT LoRA wrapper when adapted
         self._head = _LogpHead(self.model, self._decoder, self._lm_head, logprob_chunk_tokens)
 
-        if dist is not None:
-            self._broadcast_lora_from_rank0()
         self._fsdp_modules: list[Any] = []
         if fsdp:
+            if dist.is_main:
+                full_sd = self._head.state_dict()  # references to rank 0's CPU tensors
             self._apply_fsdp()
+            self._load_fsdp_from_rank0(full_sd)
+            del full_sd
+        elif dist is not None:
+            self._broadcast_lora_from_rank0()
 
         self.optimizer: torch.optim.AdamW | None = None
         self._init_snapshot: dict[str, torch.Tensor] | None = None
@@ -243,6 +267,22 @@ class Trainer:
             # Token-sum semantics: reduce-scatter is a plain SUM (no 1/world_size, no AVG op).
             m.set_gradient_divide_factor(1.0)
             m.set_force_sum_reduction_for_comms(True)
+
+    @torch.no_grad()
+    def _load_fsdp_from_rank0(self, full_sd: dict[str, torch.Tensor] | None) -> None:
+        """Materialise meta shards (ranks > 0) and fill every shard from rank 0's full state."""
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
+
+        dev = torch.device(self.device)
+        if not self.is_main:
+            self._head.to_empty(device=dev)
+        set_model_state_dict(
+            self._head, full_sd if self.is_main else {},
+            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
+        )
+        # Non-persistent buffers (e.g. rotary inv_freq) are not in the state dict.
+        for b in self._head.buffers():
+            tdist.broadcast(b, src=0)
 
     def _reshard(self) -> None:
         """Free unsharded FSDP params (the root stays unsharded after a no-grad forward).
@@ -555,11 +595,17 @@ class Trainer:
             raise ValueError(f"adapter rank {saved.r} != trainer rank {cfg.r}")
         weights = load_peft_weights(path, device="cpu")
         if self.fsdp:
-            # PEFT's loader cannot write into DTensor params; map keys as PEFT saves them
-            # (adapter name dropped) and assign shards ourselves.
+            # PEFT's loader cannot write into DTensor params: map our param names to the keys
+            # PEFT saves them under (via PEFT's own get_peft_model_state_dict on index tags)
+            # and assign shards ourselves.
             names = [n for n, _ in self._named_lora()]
-            key = {n: n.replace(".default", "") for n in names}
-            missing = [n for n in names if key[n] not in weights]
+            tags = {n: torch.tensor(i) for i, n in enumerate(names)}
+            saved_keys = get_peft_model_state_dict(
+                self.model, state_dict=tags, adapter_name=self.model.active_adapter,
+                save_embedding_layers=False,
+            )
+            key = {names[int(v)]: k for k, v in saved_keys.items()}
+            missing = [n for n in names if n not in key or key[n] not in weights]
             unexpected = sorted(set(weights) - set(key.values()))
             if missing or unexpected:
                 raise RuntimeError(f"adapter mismatch: missing={missing} unexpected={unexpected}")

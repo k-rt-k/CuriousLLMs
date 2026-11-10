@@ -24,6 +24,7 @@ import logging
 import os
 from typing import Optional
 
+from local_backend.distributed import get_context
 from local_backend.sampling_client import LocalSamplingClient
 from local_backend.training_client import LocalTrainingClient
 from local_backend.weight_sync import load_lora
@@ -71,11 +72,16 @@ class LocalServiceClient:
         **kwargs,
     ) -> LocalTrainingClient:
         """
-        Construct a LocalTrainingClient that fine-tunes `base_model` with LoRA(r=rank)
-        on the single visible GPU. Memory share with vLLM is configured via
+        Construct a LocalTrainingClient that fine-tunes `base_model` with LoRA(r=rank).
+        Memory share with vLLM is configured via
         torch.cuda.set_per_process_memory_fraction inside LocalTrainingClient.
+        Unless `dist=` is passed, the client joins the process-global
+        data-parallel context from `local_backend.distributed.init_distributed()`
+        (None when single-process).
         """
         self.base_model_name = self.base_model_name or base_model
+        if "dist" not in kwargs:
+            kwargs["dist"] = get_context()
         client = LocalTrainingClient(
             base_model=base_model,
             lora_rank=rank,

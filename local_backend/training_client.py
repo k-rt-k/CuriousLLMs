@@ -1,7 +1,9 @@
 """
 LocalTrainingClient — duck-typed replacement for `tinker.TrainingClient`.
 
-Backed by Hugging Face `transformers` + `peft` LoRA on a single GPU. Exposes:
+Backed by Hugging Face `transformers` + `peft` LoRA on one GPU, or data-parallel
+across ranks when constructed with a `DistContext` (see local_backend/distributed.py:
+rank 0 drives, other ranks serve commands, LoRA grads are SUM-all-reduced). Exposes:
 
   forward_backward_async(data, loss_fn) -> LocalFuture[ForwardBackwardOutput]
   optim_step_async(adam_params)          -> LocalFuture[OptimStepResponse]
@@ -39,11 +41,13 @@ from dataclasses import dataclass
 from typing import Any, Iterable, List, Literal, Optional, Sequence
 
 import torch
+import torch.distributed as torch_dist
 import torch.nn.functional as F
 import tinker
 from tinker import TensorData
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from local_backend.distributed import Cmd, DistContext, send_command, shard_by_tokens
 from local_backend.futures import LocalFuture, SavedPath
 from local_backend.losses import compute_loss
 from local_backend.weight_sync import sync_lora_to_vllm
@@ -88,7 +92,7 @@ class LocalTrainingClient:
         lora_rank: int,
         vllm_url: str,
         log_path: Optional[str] = None,
-        device: str = "cuda:0",
+        device: Optional[str] = None,
         dtype: torch.dtype = torch.bfloat16,
         attn_implementation: str = "sdpa",
         gpu_memory_fraction: float = 0.5,
@@ -96,8 +100,15 @@ class LocalTrainingClient:
         lora_alpha: Optional[int] = None,
         lora_target_modules: str = "all-linear",
         lora_dropout: float = 0.0,
+        dist: Optional[DistContext] = None,
     ):
         self.base_model = base_model
+        # Data parallelism (see local_backend/distributed.py). With dist None or
+        # world_size 1 every code path below is the single-process one.
+        self.dist = dist
+        self._dp = dist is not None and dist.world_size > 1
+        if device is None:
+            device = f"cuda:{dist.local_rank}" if (dist is not None and torch.cuda.is_available()) else "cuda:0"
         self.lora_rank = lora_rank
         self.vllm_url = vllm_url.rstrip("/")
         self.log_path = log_path or os.environ.get("LOG_DIR") or "."
@@ -141,7 +152,9 @@ class LocalTrainingClient:
 
         if torch.cuda.is_available() and self.gpu_memory_fraction < 1.0:
             try:
-                torch.cuda.set_per_process_memory_fraction(self.gpu_memory_fraction, device=0)
+                dev = torch.device(self.device)
+                dev_index = dev.index if dev.type == "cuda" and dev.index is not None else 0
+                torch.cuda.set_per_process_memory_fraction(self.gpu_memory_fraction, device=dev_index)
             except Exception as e:
                 logger.warning("set_per_process_memory_fraction failed: %s", e)
 
@@ -184,6 +197,14 @@ class LocalTrainingClient:
         )
         self.optimizer.zero_grad(set_to_none=True)
 
+        if self._dp:
+            # Every rank must start from rank 0's LoRA init, whatever its RNG did.
+            for p in self._trainable_params():
+                torch_dist.broadcast(p.data, src=0)
+
+    def _trainable_params(self) -> list[torch.nn.Parameter]:
+        return [p for p in self.model.parameters() if p.requires_grad]
+
     # ------------------------------------------------------------------
     # Tokenizer
     # ------------------------------------------------------------------
@@ -198,6 +219,39 @@ class LocalTrainingClient:
         data: Sequence[tinker.Datum],
         loss_fn: Literal["ppo", "importance_sampling", "nll"] = "ppo",
     ) -> LocalFuture[_ForwardBackwardResult]:
+        if self._dp:
+            per_datum_logprobs, loss_sum, total_response_tokens = self._dp_forward_backward(
+                data, loss_fn
+            )
+        else:
+            per_datum_logprobs, loss_sum, total_response_tokens = self._local_forward_backward(
+                data, loss_fn
+            )
+
+        denom = max(total_response_tokens, 1)
+        mean_loss = loss_sum / denom
+        self._last_loss_value = mean_loss
+        result = _ForwardBackwardResult(
+            loss_fn_output_type=loss_fn,
+            loss_fn_outputs=[{"logprobs": td} for td in per_datum_logprobs],
+            metrics={
+                "loss": mean_loss,
+                "response_tokens": float(total_response_tokens),
+            },
+        )
+        return LocalFuture(result)
+
+    def _local_forward_backward(
+        self,
+        data: Sequence[tinker.Datum],
+        loss_fn: Literal["ppo", "importance_sampling", "nll"],
+    ) -> tuple[list[TensorData], float, int]:
+        """Forward+backward on this process's data; accumulates into .grad.
+
+        Returns (per-datum logprobs, token-sum of the loss, # response tokens).
+        The gradient accumulated is the token-SUM of the loss (per-datum mean
+        reweighted by its response-token count), never a mean over data.
+        """
         per_datum_logprobs: list[TensorData] = []
         total_loss = torch.zeros((), device=self.device, dtype=torch.float32)
         total_response_tokens = 0
@@ -268,25 +322,126 @@ class LocalTrainingClient:
 
             per_datum_logprobs.append(TensorData.from_torch(new_logp.detach().cpu()))
 
-        denom = max(total_response_tokens, 1)
-        mean_loss = float((total_loss / denom).item())
-        self._last_loss_value = mean_loss
-        result = _ForwardBackwardResult(
-            loss_fn_output_type=loss_fn,
-            loss_fn_outputs=[{"logprobs": td} for td in per_datum_logprobs],
-            metrics={
-                "loss": mean_loss,
-                "response_tokens": float(total_response_tokens),
-            },
+        return per_datum_logprobs, float(total_loss.item()), total_response_tokens
+
+    # ------------------------------------------------------------------
+    # Data parallelism (driver side + shared per-rank bodies)
+    # ------------------------------------------------------------------
+    def _run_command(self, cmd: Cmd, payloads: list[Any], fn):
+        """Driver: broadcast `cmd`, then run the same body locally.
+
+        `dist.busy` stays True if `fn` raises, so `shutdown_workers` knows the
+        workers are stuck in a collective and must not be sent another command.
+        """
+        own = send_command(self.dist, cmd, payloads)
+        self.dist.busy = True
+        out = fn(own)
+        self.dist.busy = False
+        return out
+
+    def _dp_forward_backward(
+        self,
+        data: Sequence[tinker.Datum],
+        loss_fn: Literal["ppo", "importance_sampling", "nll"],
+    ) -> tuple[list[TensorData], float, int]:
+        data = list(data)
+        world_size = self.dist.world_size
+        lengths = [len(d.model_input.to_ints()) for d in data]
+        shards = shard_by_tokens(lengths, world_size)
+        payloads = [((idx, [data[i] for i in idx]), loss_fn) for idx in shards]
+        gathered = self._run_command(
+            Cmd.FWD_BWD, payloads, lambda p: self._do_fwd_bwd(p[0], p[1])
         )
-        return LocalFuture(result)
+
+        logprobs: list[Optional[TensorData]] = [None] * len(data)
+        loss_sum = 0.0
+        n_tokens = 0
+        for indices, rank_logprobs, rank_loss_sum, rank_tokens in gathered:
+            for i, lp in zip(indices, rank_logprobs):
+                logprobs[i] = lp
+            loss_sum += rank_loss_sum
+            n_tokens += rank_tokens
+        assert all(lp is not None for lp in logprobs), "missing logprobs after gather"
+        return logprobs, loss_sum, n_tokens
+
+    def _do_fwd_bwd(self, shard, loss_fn) -> Optional[list]:
+        """Every rank: local fwd/bwd on `shard`, SUM-all-reduce grads, gather outputs.
+
+        `shard` is `(datum_indices, datums)` (possibly empty). Returns the
+        gathered `(indices, logprobs, loss_sum, n_tokens)` per rank on the
+        driver, None on workers.
+        """
+        indices, datums = shard
+        # Grads from earlier fwd_bwd calls since the last optim step are
+        # already globally reduced; set them aside so only this call's fresh
+        # contribution is all-reduced, then add them back.
+        params = self._trainable_params()
+        prev = [p.grad for p in params]
+        for p in params:
+            p.grad = None
+        logprobs, loss_sum, n_tokens = self._local_forward_backward(datums, loss_fn)
+        self._allreduce_lora_grads()
+        for p, g in zip(params, prev):
+            if g is not None:
+                p.grad.add_(g)
+
+        gathered = [None] * self.dist.world_size if self.dist.is_driver else None
+        torch_dist.gather_object(
+            (list(indices), logprobs, loss_sum, n_tokens),
+            gathered,
+            dst=0,
+            group=self.dist.obj_group,
+        )
+        return gathered
+
+    def _allreduce_lora_grads(self) -> None:
+        """SUM-all-reduce every trainable grad (zeros where None) in flat buffers."""
+        grads_by_dtype: dict[torch.dtype, list[torch.Tensor]] = {}
+        for p in self._trainable_params():
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+            grads_by_dtype.setdefault(p.grad.dtype, []).append(p.grad)
+        for grads in grads_by_dtype.values():
+            flat = torch._utils._flatten_dense_tensors(grads)
+            torch_dist.all_reduce(flat, op=torch_dist.ReduceOp.SUM)
+            for g, synced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
+                g.copy_(synced)
+
+    def _maybe_check_sync(self) -> None:
+        """LOCAL_DIST_CHECK_SYNC=1: every 50 steps, assert LoRA params agree across ranks."""
+        if not self._dp or os.environ.get("LOCAL_DIST_CHECK_SYNC") != "1":
+            return
+        if self.step_counter % 50 != 0:
+            return
+        with torch.no_grad():
+            total = torch.stack(
+                [p.detach().to(torch.float64).sum() for p in self._trainable_params()]
+            ).sum()
+        hi, lo = total.clone(), total.clone()
+        torch_dist.all_reduce(hi, op=torch_dist.ReduceOp.MAX)
+        torch_dist.all_reduce(lo, op=torch_dist.ReduceOp.MIN)
+        if hi.item() != lo.item():
+            raise RuntimeError(
+                f"LoRA params diverged across ranks at step {self.step_counter}: "
+                f"param-sum max {hi.item()!r} != min {lo.item()!r}"
+            )
 
     # ------------------------------------------------------------------
     # optim_step
     # ------------------------------------------------------------------
     async def optim_step_async(self, adam_params: tinker.AdamParams) -> LocalFuture[_OptimStepResponse]:
+        if self._dp:
+            metrics = self._run_command(
+                Cmd.OPTIM, [adam_params] * self.dist.world_size, self._do_optim
+            )
+        else:
+            metrics = self._do_optim(adam_params)
+        return LocalFuture(_OptimStepResponse(metrics=metrics))
+
+    def _do_optim(self, adam_params: tinker.AdamParams) -> dict:
+        """Every rank: identical AdamW step on the (already all-reduced) grads."""
         self._set_adam(adam_params)
-        # Optional gradient clipping
+        # Optional gradient clipping (after the all-reduce, so identical on every rank)
         grad_clip = float(getattr(adam_params, "grad_clip_norm", 0.0) or 0.0)
         if grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(
@@ -296,10 +451,11 @@ class LocalTrainingClient:
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
         self.step_counter += 1
+        self._maybe_check_sync()
         metrics = {"step": float(self.step_counter)}
         if self._last_loss_value is not None:
             metrics["prev_loss"] = self._last_loss_value
-        return LocalFuture(_OptimStepResponse(metrics=metrics))
+        return metrics
 
     def _set_adam(self, adam_params: tinker.AdamParams):
         for group in self.optimizer.param_groups:
@@ -367,9 +523,24 @@ class LocalTrainingClient:
 
     async def load_state_async(self, path: str) -> LocalFuture[None]:
         # Accepts either a state_dir (with optimizer.pt) or a bare adapter dir.
+        # Under data parallelism every rank loads the same path (it must be on
+        # storage all ranks can see).
+        if self._dp:
+            self._check_adapter_dir(path)
+            self._run_command(Cmd.LOAD_STATE, [path] * self.dist.world_size, self._do_load_state)
+        else:
+            self._do_load_state(path)
+        return LocalFuture(None)
+
+    @staticmethod
+    def _check_adapter_dir(path: str) -> str:
         cfg = os.path.join(path, "adapter_config.json")
         if not os.path.exists(cfg):
             raise FileNotFoundError(f"No adapter_config.json found under {path}")
+        return cfg
+
+    def _do_load_state(self, path: str) -> None:
+        self._check_adapter_dir(path)
 
         # PEFT's load_adapter STACKS rather than replaces when adapter_name
         # already exists. Delete the in-memory adapter first.
@@ -415,7 +586,6 @@ class LocalTrainingClient:
                 logger.warning("RNG restore failed: %s", e)
 
         logger.info("load_state(%s) ok (step=%d)", path, self.step_counter)
-        return LocalFuture(None)
 
     async def load_adapter_weights_async(self, path: str) -> LocalFuture[None]:
         """Warm-start: load only adapter weights. Leaves optimizer/step_counter/RNG fresh.
@@ -426,14 +596,25 @@ class LocalTrainingClient:
         Accepts either a bare adapter dir or a state dir (both contain
         adapter_config.json).
         """
+        # Serialize against concurrent vLLM weight-syncs so a sampler creation
+        # can't race with the in-flight adapter swap.
+        async with self._adapter_swap_lock:
+            if self._dp:
+                self._validate_adapter(path)  # fail on the driver before involving workers
+                self._run_command(
+                    Cmd.LOAD_ADAPTER, [path] * self.dist.world_size, self._do_load_adapter
+                )
+            else:
+                self._do_load_adapter(path)
+        return LocalFuture(None)
+
+    def _validate_adapter(self, path: str) -> None:
         if self.model is None:
             raise RuntimeError(
                 "LocalTrainingClient._init_async() must run before load_adapter_weights_async; "
                 "use LocalServiceClient.create_lora_training_client_async to construct."
             )
-        cfg = os.path.join(path, "adapter_config.json")
-        if not os.path.exists(cfg):
-            raise FileNotFoundError(f"No adapter_config.json found under {path}")
+        cfg = self._check_adapter_dir(path)
 
         # Cheap up-front rank check — PEFT will silently load a mismatched-rank
         # adapter, leading to wrong tensor shapes later. Fail loudly here.
@@ -449,45 +630,44 @@ class LocalTrainingClient:
                 f"trainer lora_rank={self.lora_rank}. Re-init the trainer with the same rank."
             )
 
-        # Serialize against concurrent vLLM weight-syncs so a sampler creation
-        # can't race with the in-flight adapter swap.
-        async with self._adapter_swap_lock:
+    def _do_load_adapter(self, path: str) -> None:
+        """Every rank: replace the LoRA adapter with `path`, fresh optimizer, step 0."""
+        self._validate_adapter(path)
+        try:
+            existing = set(getattr(self.model, "peft_config", {}).keys())
+        except Exception:
+            existing = set()
+        if "default" in existing:
             try:
-                existing = set(getattr(self.model, "peft_config", {}).keys())
-            except Exception:
-                existing = set()
-            if "default" in existing:
-                try:
-                    self.model.delete_adapter("default")
-                except Exception as e:
-                    logger.warning("delete_adapter('default') failed before warm-start: %s", e)
-            self.model.load_adapter(path, adapter_name="default", is_trainable=True)
-            # set_adapter MUST succeed — silent failure leaves the wrong adapter
-            # active and training proceeds with wrong weights. Let real errors propagate.
-            self.model.set_adapter("default")
+                self.model.delete_adapter("default")
+            except Exception as e:
+                logger.warning("delete_adapter('default') failed before warm-start: %s", e)
+        self.model.load_adapter(path, adapter_name="default", is_trainable=True)
+        # set_adapter MUST succeed — silent failure leaves the wrong adapter
+        # active and training proceeds with wrong weights. Let real errors propagate.
+        self.model.set_adapter("default")
 
-            # Rebuild optimizer over the freshly-loaded LoRA params so AdamW state
-            # is fresh. (The previous optimizer was bound to deleted param tensors.)
-            # _adam_state retains lr/betas/eps/weight_decay (set by the user via
-            # optim_step or by _init_async defaults); only the momentum state resets.
-            trainable = [p for p in self.model.parameters() if p.requires_grad]
-            if not trainable:
-                raise RuntimeError(
-                    f"No trainable LoRA params after load_adapter({path}). Adapter may be corrupted."
-                )
-            self.optimizer = torch.optim.AdamW(
-                trainable,
-                lr=self._adam_state["lr"],
-                betas=(self._adam_state["beta1"], self._adam_state["beta2"]),
-                eps=self._adam_state["eps"],
-                weight_decay=self._adam_state["weight_decay"],
+        # Rebuild optimizer over the freshly-loaded LoRA params so AdamW state
+        # is fresh. (The previous optimizer was bound to deleted param tensors.)
+        # _adam_state retains lr/betas/eps/weight_decay (set by the user via
+        # optim_step or by _init_async defaults); only the momentum state resets.
+        trainable = [p for p in self.model.parameters() if p.requires_grad]
+        if not trainable:
+            raise RuntimeError(
+                f"No trainable LoRA params after load_adapter({path}). Adapter may be corrupted."
             )
-            self.optimizer.zero_grad(set_to_none=True)
-            self.step_counter = 0
-            self._last_loss_value = None
+        self.optimizer = torch.optim.AdamW(
+            trainable,
+            lr=self._adam_state["lr"],
+            betas=(self._adam_state["beta1"], self._adam_state["beta2"]),
+            eps=self._adam_state["eps"],
+            weight_decay=self._adam_state["weight_decay"],
+        )
+        self.optimizer.zero_grad(set_to_none=True)
+        self.step_counter = 0
+        self._last_loss_value = None
 
         logger.info("load_adapter_weights(%s) ok — fresh optimizer, step=0", path)
-        return LocalFuture(None)
 
     # ------------------------------------------------------------------
     # SamplingClient creation (with weight sync)

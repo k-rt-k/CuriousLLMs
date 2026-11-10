@@ -2125,7 +2125,6 @@ async def do_sync_training(
 # END ADDED CODE
 
 
-@scope
 def validate_backend_config(cfg) -> None:
     """Reject option combinations the selected backend cannot honor."""
     backend = getattr(cfg, "backend", "tinker")
@@ -2136,6 +2135,7 @@ def validate_backend_config(cfg) -> None:
         )
 
 
+@scope
 async def main(
     cfg: Config,
 ):

@@ -43,12 +43,12 @@ source slurm/launch_vllm.sh
 
 EXTRA_MODEL_PATH=""
 if [[ -n "${MODEL_PATH}" ]]; then
-    EXTRA_MODEL_PATH="--model_path $MODEL_PATH"
+    EXTRA_MODEL_PATH="model_path=$MODEL_PATH"
 fi
 
 python math_evaluation.py \
     backend=local \
-    --model_name "$MODEL_NAME" \
-    --log_path "$LOG_DIR" \
+    model_name="$MODEL_NAME" \
+    log_path="$LOG_DIR" \
     $EXTRA_MODEL_PATH \
     ${=EXTRA_ARGS}

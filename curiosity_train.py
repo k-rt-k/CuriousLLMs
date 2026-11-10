@@ -669,6 +669,9 @@ class Config:
     init_from_adapter: str | None = None
     # Which service backend to use: Tinker (network) or local (vLLM + HF/PEFT).
     backend: Literal["tinker", "local"] = "tinker"
+    # Reference model for the KL penalty: the base model, or the init_from_adapter
+    # warm-start adapter (local backend only).
+    kl_reference: Literal["base", "init"] = "base"
 
     async_config: AsyncConfig | None = None
     stream_minibatch_config: StreamMinibatchConfig | None = None
@@ -770,6 +773,7 @@ async def do_sync_training_with_stream_minibatch(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    kl_reference_client: tinker.SamplingClient | None = None,
     # END SEMANTIC_RND CODE
 ):
     """
@@ -864,6 +868,7 @@ async def do_sync_training_with_stream_minibatch(
                 rnd_update_steps=rnd_update_steps,
                 penalize_incorrect_novelty=penalize_incorrect_novelty,
                 correctness_threshold=correctness_threshold,
+                kl_reference_client=kl_reference_client,
             )
             # END SEMANTIC_RND CODE
 
@@ -913,6 +918,7 @@ async def do_async_training(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    kl_reference_client: tinker.SamplingClient | None = None,
     # END SEMANTIC_RND CODE
 ):
     """
@@ -1082,6 +1088,7 @@ async def do_async_training(
                     rnd_update_steps=rnd_update_steps,
                     penalize_incorrect_novelty=penalize_incorrect_novelty,
                     correctness_threshold=correctness_threshold,
+                    kl_reference_client=kl_reference_client,
                 )
                 # END SEMANTIC_RND CODE
             else:
@@ -1122,6 +1129,7 @@ async def do_async_training(
                     rnd_update_steps=rnd_update_steps,
                     penalize_incorrect_novelty=penalize_incorrect_novelty,
                     correctness_threshold=correctness_threshold,
+                    kl_reference_client=kl_reference_client,
                 )
                 # END SEMANTIC_RND CODE
                 # END ADDED CODE
@@ -1316,6 +1324,7 @@ async def prepare_minibatch(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    kl_reference_client: tinker.SamplingClient | None = None,
     rnd_minibatch_size: int = 1024,
     curiosity_warmup_batches: int = 0,
     entropy_bonus_coef: float | None = None,
@@ -1668,8 +1677,9 @@ async def prepare_minibatch(
         with timed("kl_vs_base", metrics):
             kl_penalty_metrics = await incorporate_kl_penalty(
                 data_D,
-                service_client.create_sampling_client(base_model=model_name),
-                # ^^^ TODO: replace with the model we load, if relevant
+                kl_reference_client
+                if kl_reference_client is not None
+                else service_client.create_sampling_client(base_model=model_name),
                 kl_penalty_coef,
                 kl_discount_factor,
             )
@@ -1740,6 +1750,7 @@ async def do_train_step_streaming_and_get_sampling_client(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    kl_reference_client: tinker.SamplingClient | None = None,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
 # END SEMANTIC_RND CODE
     """
@@ -1809,6 +1820,7 @@ async def do_train_step_streaming_and_get_sampling_client(
                 rnd_update_steps=rnd_update_steps,
                 penalize_incorrect_novelty=penalize_incorrect_novelty,
                 correctness_threshold=correctness_threshold,
+                kl_reference_client=kl_reference_client,
                 rnd_minibatch_size=cfg.rnd_minibatch_size,
                 curiosity_warmup_batches=cfg.curiosity_warmup_batches,
                 entropy_bonus_coef=cfg.entropy_bonus_coef,
@@ -1884,6 +1896,7 @@ async def do_train_step_and_get_sampling_client(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    kl_reference_client: tinker.SamplingClient | None = None,
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
     """
     Perform a single training step and return updated sampling client.
@@ -1931,6 +1944,7 @@ async def do_train_step_and_get_sampling_client(
         rnd_update_steps=rnd_update_steps,
         penalize_incorrect_novelty=penalize_incorrect_novelty,
         correctness_threshold=correctness_threshold,
+        kl_reference_client=kl_reference_client,
         rnd_minibatch_size=cfg.rnd_minibatch_size,
         curiosity_warmup_batches=cfg.curiosity_warmup_batches,
         entropy_bonus_coef=cfg.entropy_bonus_coef,
@@ -1990,6 +2004,7 @@ async def do_sync_training(
     rnd_update_steps: int = 50,
     penalize_incorrect_novelty: bool = True,
     correctness_threshold: float = 0.5,
+    kl_reference_client: tinker.SamplingClient | None = None,
 ):
     """
     Implements fully synchronous on-policy training.
@@ -2100,6 +2115,7 @@ async def do_sync_training(
             rnd_update_steps=rnd_update_steps,
             penalize_incorrect_novelty=penalize_incorrect_novelty,
             correctness_threshold=correctness_threshold,
+            kl_reference_client=kl_reference_client,
         )
         # END SEMANTIC_RND CODE
         log_memory_usage(f"Batch {i_batch} after train_step")
@@ -2133,6 +2149,22 @@ def validate_backend_config(cfg) -> None:
             "init_from_adapter is only supported with backend=local "
             "(Tinker has no adapter-only warm start)."
         )
+    if getattr(cfg, "kl_reference", "base") == "init":
+        if backend != "local":
+            raise ValueError("kl_reference=init is only supported with backend=local.")
+        if not getattr(cfg, "init_from_adapter", None):
+            raise ValueError("kl_reference=init requires init_from_adapter to be set.")
+
+
+def make_kl_reference_client(service_client, cfg):
+    """Sampling client used as the KL reference (created once, reused every batch)."""
+    if getattr(cfg, "kl_reference", "base") == "init":
+        return service_client.create_sampling_client(
+            model_path=cfg.init_from_adapter,
+            base_model=cfg.model_name,
+            adapter_name="kl_ref",
+        )
+    return service_client.create_sampling_client(base_model=cfg.model_name)
 
 
 @scope
@@ -2242,6 +2274,11 @@ async def main(
         base_url=cfg.base_url,
         log_path=cfg.log_path,
         model_name=cfg.model_name,
+    )
+    kl_reference_client = (
+        make_kl_reference_client(service_client, cfg)
+        if cfg.kl_penalty_coef > 0
+        else None
     )
     training_client = await service_client.create_lora_training_client_async(
         cfg.model_name, rank=cfg.lora_rank
@@ -2400,6 +2437,7 @@ async def main(
             rnd_update_steps=cfg.rnd_update_steps,
             penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
             correctness_threshold=cfg.correctness_threshold,
+            kl_reference_client=kl_reference_client,
         )
         
         # Switch to main dataset
@@ -2440,6 +2478,7 @@ async def main(
             rnd_update_steps=cfg.rnd_update_steps,
             penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
             correctness_threshold=cfg.correctness_threshold,
+            kl_reference_client=kl_reference_client,
         )
     else:
         # No dataset switch needed - train normally
@@ -2462,6 +2501,7 @@ async def main(
             rnd_update_steps=cfg.rnd_update_steps,
             penalize_incorrect_novelty=cfg.penalize_incorrect_novelty,
             correctness_threshold=cfg.correctness_threshold,
+            kl_reference_client=kl_reference_client,
         )
     # END SEMANTIC_RND CODE
     # END ADDED CODE

@@ -97,12 +97,15 @@ class LocalServiceClient:
         self,
         model_path: Optional[str] = None,
         base_model: Optional[str] = None,
+        adapter_name: Optional[str] = None,
         **_unused,
     ) -> LocalSamplingClient:
         """
         If `model_path` is set, it's a local PEFT adapter directory: load it into
         vLLM under a name derived from the path and bind the returned client to
         that adapter.
+        `adapter_name` overrides the default path-leaf adapter name (e.g. the
+        fixed "kl_ref" used for the KL reference adapter).
         If only `base_model` is set, bind to the base model (no adapter).
         """
         bm = base_model or self.base_model_name
@@ -110,9 +113,8 @@ class LocalServiceClient:
             raise RuntimeError("create_sampling_client needs base_model or service must know it.")
         self.base_model_name = bm
 
-        adapter_name: Optional[str] = None
         if model_path is not None:
-            adapter_name = _adapter_name_from_path(model_path)
+            adapter_name = adapter_name or _adapter_name_from_path(model_path)
             try:
                 load_lora(self.vllm_url, adapter_name, model_path)
             except RuntimeError as e:

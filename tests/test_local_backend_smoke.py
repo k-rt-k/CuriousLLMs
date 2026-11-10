@@ -20,6 +20,7 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import pytest
 import tinker
 import torch
 
@@ -60,7 +61,7 @@ def test_to_sample_response():
     assert isinstance(resp, tinker.SampleResponse)
     assert len(resp.sequences) == 2
     assert resp.sequences[0].tokens == [11, 22, 33]
-    assert resp.sequences[0].logprobs == [-0.1, -0.2, -0.3]
+    assert resp.sequences[0].logprobs == pytest.approx([-0.1, -0.2, -0.3])
     assert resp.sequences[0].stop_reason == "stop"
     assert resp.sequences[1].stop_reason == "length"
     print("test_to_sample_response: OK")

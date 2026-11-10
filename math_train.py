@@ -27,6 +27,7 @@ class CLIConfig:
     load_checkpoint_path: str | None = None
     init_from_adapter: str | None = None
     backend: Literal["tinker", "local"] = "tinker"
+    kl_reference: Literal["base", "init"] = "base"
 
     # Environment configuration
     env: str = "mixed"  # Options: arithmetic, math, polaris, deepmath, gsm8k, mixed
@@ -224,6 +225,7 @@ async def cli_main(cli_config: CLIConfig):
         load_checkpoint_path=cli_config.load_checkpoint_path,
         init_from_adapter=cli_config.init_from_adapter,
         backend=cli_config.backend,
+        kl_reference=cli_config.kl_reference,
         compute_post_kl=cli_config.compute_post_kl,
         kl_penalty_coef=cli_config.kl_penalty_coef,
         num_substeps=cli_config.num_substeps,

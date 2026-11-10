@@ -74,12 +74,13 @@ class LocalSamplingClient:
         adapter_name: Optional[str] = None,
         tokenizer=None,
         request_timeout: float = 600.0,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
         self.vllm_url = vllm_url.rstrip("/")
         self.base_model_name = base_model_name
         self.adapter_name = adapter_name
         self.tokenizer = tokenizer  # optional; only needed for compute_logprobs
-        self._client = httpx.AsyncClient(timeout=request_timeout)
+        self._client = httpx.AsyncClient(timeout=request_timeout, transport=transport)
 
     def _model_field(self) -> str:
         return self.adapter_name or self.base_model_name
@@ -134,19 +135,56 @@ class LocalSamplingClient:
         import asyncio
         return asyncio.run(self.sample_async(prompt, num_samples, sampling_params))
 
-    async def compute_logprobs_async(self, *args, **kwargs):
-        raise NotImplementedError(
-            "LocalSamplingClient.compute_logprobs_async is not implemented. "
-            "Use LocalTrainingClient.forward_async for teacher-forced logprobs."
-        )
+    async def compute_logprobs_async(self, prompt) -> list[Optional[float]]:
+        """Teacher-forced logprobs of `prompt` under this client's model.
 
-    def compute_logprobs(self, *args, **kwargs):
-        raise NotImplementedError(
-            "LocalSamplingClient.compute_logprobs is not implemented."
-        )
+        Same contract as Tinker: returns a list of length len(tokens) whose
+        element 0 is None and element i is log p(tok_i | tok_<i).
+        """
+        prompt_ids = _model_input_to_token_ids(prompt)
+        body = {
+            "model": self._model_field(),
+            "prompt": prompt_ids,
+            "max_tokens": 1,
+            "temperature": 1.0,
+            "prompt_logprobs": 0,
+        }
+        r = await self._client.post(self.vllm_url + "/v1/completions", json=body)
+        if r.status_code >= 400:
+            raise RuntimeError(f"vLLM /v1/completions -> {r.status_code}: {r.text[:500]}")
+        return _parse_prompt_logprobs(r.json(), prompt_ids)
+
+    def compute_logprobs(self, prompt) -> list[Optional[float]]:
+        import asyncio
+        return asyncio.run(self.compute_logprobs_async(prompt))
 
     async def aclose(self):
         await self._client.aclose()
+
+
+def _parse_prompt_logprobs(data: dict, prompt_ids: Sequence[int]) -> list[Optional[float]]:
+    """vLLM `choices[0].prompt_logprobs` -> [None, lp(tok_1), ..., lp(tok_{n-1})].
+
+    Each non-null entry is {"<token_id>": {"logprob", "rank", "decoded_token"}}; with
+    prompt_logprobs=0 it holds the actual prompt token (and the top-1 token when that
+    differs), so we select by the actual token id rather than by position in the dict.
+    """
+    entries = data["choices"][0].get("prompt_logprobs")
+    if entries is None or len(entries) != len(prompt_ids):
+        raise RuntimeError(
+            f"vLLM prompt_logprobs length {None if entries is None else len(entries)} "
+            f"!= prompt length {len(prompt_ids)}"
+        )
+    out: list[Optional[float]] = []
+    for i, (tok, entry) in enumerate(zip(prompt_ids, entries)):
+        if entry is None:
+            out.append(None)
+            continue
+        by_id = {int(k): v for k, v in entry.items()}
+        if tok not in by_id:
+            raise RuntimeError(f"vLLM prompt_logprobs[{i}] has no entry for token id {tok}")
+        out.append(float(by_id[tok]["logprob"]))
+    return out
 
 
 def _to_sample_response(data: dict, prompt_ids: Sequence[int]) -> tinker.SampleResponse:

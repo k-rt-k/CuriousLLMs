@@ -215,7 +215,7 @@ sbatch --nodes=2 --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,VLLM_TP_SIZE=1 
        slurm/sbatch_train_dist.sh
 ```
 
-`sbatch_train_dist.sh` (defaults: `--nodes=2`, `--gres=gpu:4`, 1 task per node) runs `slurm/dist_node.sh` on every node via `srun`. Each node starts one vLLM on GPUs `0..VLLM_TP_SIZE-1` and `GPUS_PER_NODE - VLLM_TP_SIZE` trainer ranks (`torchrun --nnodes=$SLURM_NNODES --node_rank=$SLURM_NODEID`, c10d rendezvous at the first node, port `29500 + JOB_ID % 1000`) on the remaining GPUs. Global rank 0 drives the RL loop and its sampling client load-balances across every node's vLLM (`VLLM_URLS`, port `20000 + JOB_ID % 9000`). Takes the same env vars as the table below, plus `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 4); `TRAINER_NUM_GPUS` is not used. `DRY_RUN=1` prints the computed topology and commands without launching.
+`sbatch_train_dist.sh` (defaults: `--nodes=2`, `--gres=gpu:4`, 1 task per node) runs `slurm/dist_node.sh` on every node via `srun`. Each node starts one vLLM on GPUs `0..VLLM_TP_SIZE-1` and `GPUS_PER_NODE - VLLM_TP_SIZE` trainer ranks (`torchrun --nnodes=$SLURM_NNODES --node_rank=$SLURM_NODEID`, c10d rendezvous hosted on the first node; global rank 0 may land on any node, port `29500 + JOB_ID % 1000`) on the remaining GPUs. Global rank 0 drives the RL loop and its sampling client load-balances across every node's vLLM (`VLLM_URLS`, port `20000 + JOB_ID % 9000`). Takes the same env vars as the table above (`VLLM_GPU_MEM_FRAC` defaults to 0.85 since vLLM has dedicated GPUs), plus `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 4); `TRAINER_NUM_GPUS` is not used. `DRY_RUN=1` prints the computed topology and commands without launching.
 
 ### Adapter init priority
 

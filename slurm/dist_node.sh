@@ -24,7 +24,7 @@ cd "$REPO_DIR"
 : "${ENV:=mixed}"
 : "${DATASET_SCHEDULE:=m-m}"
 : "${LOSS_FN:=ppo}"
-: "${VLLM_GPU_MEM_FRAC:=0.45}"
+: "${VLLM_GPU_MEM_FRAC:=0.85}"  # vLLM has its own GPU(s) here
 : "${VLLM_TP_SIZE:=1}"
 : "${GPUS_PER_NODE:=${SLURM_GPUS_ON_NODE:-4}}"
 : "${TRAINER_GPUS_PER_NODE:=$(( GPUS_PER_NODE - VLLM_TP_SIZE ))}"
@@ -56,6 +56,7 @@ TORCHRUN_CMD=(torchrun
     --nnodes="$SLURM_NNODES" --node_rank="$SLURM_NODEID"
     --nproc_per_node="$TRAINER_GPUS_PER_NODE"
     --rdzv_backend=c10d --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT"
+    --rdzv_id="$SLURM_JOB_ID"
     math_train.py
     backend=local
     model_name="$MODEL_NAME"

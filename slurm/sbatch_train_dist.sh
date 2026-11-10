@@ -18,8 +18,8 @@
 #
 # Every node runs ONE vLLM server on GPUs 0..VLLM_TP_SIZE-1 and
 # TRAINER_GPUS_PER_NODE = GPUS_PER_NODE - VLLM_TP_SIZE torchrun trainer ranks on
-# the remaining GPUs (see slurm/dist_node.sh). Global rank 0 (on the first node)
-# drives the RL loop; its sampling client load-balances across every node's vLLM
+# the remaining GPUs (see slurm/dist_node.sh). Global rank 0 (on whichever node c10d
+# rendezvous assigns it -- not necessarily the first) drives the RL loop; its sampling client load-balances across every node's vLLM
 # (VLLM_URLS). Only rank 0 logs, checkpoints and talks to vLLM.
 #
 # Node count: sbatch --nodes=N (default 2). GPUs per node: GPUS_PER_NODE
@@ -49,7 +49,7 @@ cd "$REPO_DIR"
 : "${ENV:=mixed}"
 : "${DATASET_SCHEDULE:=m-m}"
 : "${LOSS_FN:=ppo}"
-: "${VLLM_GPU_MEM_FRAC:=0.45}"
+: "${VLLM_GPU_MEM_FRAC:=0.85}"  # vLLM has its own GPU(s) here
 : "${VLLM_TP_SIZE:=1}"
 : "${GPUS_PER_NODE:=${SLURM_GPUS_ON_NODE:-4}}"
 : "${EXTRA_ARGS:=}"

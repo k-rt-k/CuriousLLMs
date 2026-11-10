@@ -23,6 +23,11 @@
 : "${VLLM_DTYPE:=bfloat16}"
 : "${VLLM_MAX_MODEL_LEN:=4096}"
 : "${VLLM_TP_SIZE:=1}"
+# ~/.triton may be a symlink into node-local /scratch that does not exist on
+# every node (vLLM engine init then dies with FileNotFoundError). Use a
+# per-job node-local dir instead; exported so the trainer inherits it too.
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+mkdir -p "$TRITON_CACHE_DIR"
 : "${VLLM_EXTRA_ARGS:=}"
 
 if [[ -z "${VLLM_PORT}" ]]; then

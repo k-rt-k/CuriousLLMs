@@ -201,7 +201,7 @@ sbatch --nodes=2 --export=ALL,MODEL_NAME=meta-llama/Llama-3.2-3B,VLLM_TP_SIZE=1 
 (`LOCAL_TRAINER_GPU_MEM_FRAC=1.0`), launched with
 `torchrun --nnodes=$SLURM_NNODES --node_rank=$SLURM_NODEID --nproc_per_node=$TRAINER_GPUS_PER_NODE
 --rdzv_backend=c10d --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT`. Each node waits for every node's vLLM
-`/health` before starting torchrun. Rank 0 (first node) drives the loop; its sampling client balances across
+`/health` before starting torchrun. Global rank 0 (any node: c10d assigns ranks in join order) drives the loop; its sampling client balances across
 `VLLM_URLS`.
 
 | Var | Default | Notes |

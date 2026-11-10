@@ -23,7 +23,7 @@ works unchanged.
 Entry point:
 
     from local_backend import LocalServiceClient
-    service = LocalServiceClient(vllm_url=..., model_name=...)
+    service = LocalServiceClient(vllm_urls=..., model_name=...)
     training_client = await service.create_lora_training_client_async(
         base_model=model_name, rank=32
     )

@@ -39,7 +39,7 @@ def test_load_adapter_weights_fresh_optimizer(tmp_path):
         seed = LocalTrainingClient(
             base_model=model_name,
             lora_rank=8,
-            vllm_url="http://placeholder",
+            vllm_urls=[],
             log_path=log_path,
             gpu_memory_fraction=0.6,
         )
@@ -68,7 +68,7 @@ def test_load_adapter_weights_fresh_optimizer(tmp_path):
         fresh = LocalTrainingClient(
             base_model=model_name,
             lora_rank=8,
-            vllm_url="http://placeholder",
+            vllm_urls=[],
             log_path=log_path,
             gpu_memory_fraction=0.6,
         )

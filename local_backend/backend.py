@@ -18,12 +18,10 @@ def make_service_client(
 
         return tinker.ServiceClient(base_url=base_url)
     if backend == "local":
-        import os
-
         from local_backend import LocalServiceClient
 
         return LocalServiceClient(
-            vllm_url=base_url or os.environ.get("VLLM_URL"),
+            vllm_urls=base_url,  # None -> $VLLM_URLS, then $VLLM_URL; commas split
             log_path=log_path,
             base_model_name=model_name,
         )

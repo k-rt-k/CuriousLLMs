@@ -6,7 +6,7 @@ def test_local_backend_returns_local_client(monkeypatch):
     from local_backend import LocalServiceClient
 
     c = make_service_client("local", base_url="http://x:1", log_path="/tmp/l", model_name="m")
-    assert isinstance(c, LocalServiceClient) and c.vllm_url == "http://x:1"
+    assert isinstance(c, LocalServiceClient) and c.vllm_urls == ["http://x:1"]
 
 
 def test_tinker_backend_returns_tinker_client(monkeypatch):

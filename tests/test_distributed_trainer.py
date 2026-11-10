@@ -118,7 +118,7 @@ def _proc(rank, world_size, port, model_dir, out_dir, scenario, n_datums, load_p
     client = LocalTrainingClient(
         base_model=model_dir,
         lora_rank=4,
-        vllm_url="http://placeholder",
+        vllm_urls=[],
         log_path=os.path.join(out_dir, f"logs_r{rank}"),
         device="cpu",
         dtype=torch.float32,

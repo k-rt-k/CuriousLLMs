@@ -128,7 +128,7 @@ async def main(cfg: CLIConfig) -> None:
 
     # --- training client ------------------------------------------------------
     service_client = LocalServiceClient(
-        vllm_url=cfg.base_url or os.environ.get("VLLM_URL"),
+        vllm_urls=cfg.base_url,  # None -> $VLLM_URLS, then $VLLM_URL
         log_path=log_path,
         base_model_name=cfg.model_name,
     )

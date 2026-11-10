@@ -14,7 +14,7 @@ Tinker call shape (curiosity_train.py:2106-2117, math_evaluation.py):
     )
 
 In the local backend:
-- `base_url` is repurposed as `vllm_url` (the running vLLM HTTP endpoint).
+- `base_url` is repurposed as the vLLM HTTP endpoint(s) (comma-separated for several).
 - `model_path` is a local PEFT adapter directory.
 """
 
@@ -22,12 +22,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 from local_backend.distributed import get_context
 from local_backend.sampling_client import LocalSamplingClient
 from local_backend.training_client import LocalTrainingClient
-from local_backend.weight_sync import load_lora
+from local_backend.weight_sync import load_lora, normalize_urls
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,9 @@ class LocalServiceClient:
     Owns the vLLM URL + tokenizer cache. Hands out training and sampling clients.
 
     Args:
-        vllm_url: URL of a running vLLM OpenAI-compatible server.
-                  If None, read from the VLLM_URL env var (set by sbatch_train.sh).
+        vllm_urls: URL(s) of running vLLM OpenAI-compatible servers (list, or
+                  comma-separated string). If None, read $VLLM_URLS (comma-separated),
+                  then $VLLM_URL (set by sbatch_train.sh).
         base_model_name: the HF model id loaded into vLLM. Sampling clients
                   bound to "no adapter" will route to this.
     """
@@ -46,18 +47,22 @@ class LocalServiceClient:
     def __init__(
         self,
         *,
-        vllm_url: Optional[str] = None,
+        vllm_urls: Union[str, Sequence[str], None] = None,
         base_model_name: Optional[str] = None,
         log_path: Optional[str] = None,
         **_unused,  # accept and discard `base_url` etc. for back-compat
     ):
-        if vllm_url is None:
-            vllm_url = os.environ.get("VLLM_URL") or _unused.get("base_url")
-        if vllm_url is None:
-            raise RuntimeError(
-                "LocalServiceClient requires vllm_url. Pass vllm_url=... or set $VLLM_URL."
+        if vllm_urls is None:
+            vllm_urls = (
+                os.environ.get("VLLM_URLS")
+                or os.environ.get("VLLM_URL")
+                or _unused.get("base_url")
             )
-        self.vllm_url = vllm_url.rstrip("/")
+        self.vllm_urls = normalize_urls(vllm_urls)
+        if not self.vllm_urls:
+            raise RuntimeError(
+                "LocalServiceClient requires vllm_urls. Pass vllm_urls=... or set $VLLM_URLS / $VLLM_URL."
+            )
         self.base_model_name = base_model_name  # may be filled in later by callers
         self.log_path = log_path or os.environ.get("LOG_DIR")
         self._tokenizer_cache: dict[str, object] = {}
@@ -85,7 +90,7 @@ class LocalServiceClient:
         client = LocalTrainingClient(
             base_model=base_model,
             lora_rank=rank,
-            vllm_url=self.vllm_url,
+            vllm_urls=self.vllm_urls,
             log_path=self.log_path,
             **kwargs,
         )
@@ -122,13 +127,13 @@ class LocalServiceClient:
         if model_path is not None:
             adapter_name = adapter_name or _adapter_name_from_path(model_path)
             try:
-                load_lora(self.vllm_url, adapter_name, model_path)
+                load_lora(self.vllm_urls, adapter_name, model_path)
             except RuntimeError as e:
                 # Already loaded? Best-effort idempotency.
                 logger.warning("load_lora during create_sampling_client raised: %s", e)
 
         return LocalSamplingClient(
-            vllm_url=self.vllm_url,
+            vllm_urls=self.vllm_urls,
             base_model_name=bm,
             adapter_name=adapter_name,
         )

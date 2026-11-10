@@ -21,12 +21,15 @@ exactly with what the trainer will score later.
 
 from __future__ import annotations
 
+import itertools
 import logging
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import httpx
 import numpy as np
 import tinker
+
+from local_backend.weight_sync import normalize_urls
 
 logger = logging.getLogger(__name__)
 
@@ -69,18 +72,45 @@ class LocalSamplingClient:
     def __init__(
         self,
         *,
-        vllm_url: str,
+        vllm_urls: Union[str, Sequence[str]],
         base_model_name: str,
         adapter_name: Optional[str] = None,
         tokenizer=None,
         request_timeout: float = 600.0,
         transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
-        self.vllm_url = vllm_url.rstrip("/")
+        self.vllm_urls = normalize_urls(vllm_urls)
+        if not self.vllm_urls:
+            raise RuntimeError("LocalSamplingClient requires at least one URL in vllm_urls.")
+        # In-flight request count per server. Used from a single asyncio event loop
+        # (no awaits between read and update in _acquire_url), so no thread lock is needed.
+        self._in_flight: dict[str, int] = {u: 0 for u in self.vllm_urls}
+        self._rr = itertools.count()
         self.base_model_name = base_model_name
         self.adapter_name = adapter_name
         self.tokenizer = tokenizer  # optional; only needed for compute_logprobs
         self._client = httpx.AsyncClient(timeout=request_timeout, transport=transport)
+
+    def _acquire_url(self) -> str:
+        """Least in-flight server; ties broken round-robin. Caller must _release_url."""
+        start = next(self._rr) % len(self.vllm_urls)
+        order = self.vllm_urls[start:] + self.vllm_urls[:start]
+        url = min(order, key=lambda u: self._in_flight[u])  # min keeps the first (round-robin) tie
+        self._in_flight[url] += 1
+        return url
+
+    def _release_url(self, url: str) -> None:
+        self._in_flight[url] -= 1
+
+    async def _post_completion(self, body: dict) -> dict:
+        url = self._acquire_url()
+        try:
+            r = await self._client.post(url + "/v1/completions", json=body)
+        finally:
+            self._release_url(url)
+        if r.status_code >= 400:
+            raise RuntimeError(f"vLLM {url}/v1/completions -> {r.status_code}: {r.text[:500]}")
+        return r.json()
 
     def _model_field(self) -> str:
         return self.adapter_name or self.base_model_name
@@ -123,10 +153,7 @@ class LocalSamplingClient:
         if stop_ids is not None:
             body["stop_token_ids"] = stop_ids
 
-        r = await self._client.post(self.vllm_url + "/v1/completions", json=body)
-        if r.status_code >= 400:
-            raise RuntimeError(f"vLLM /v1/completions -> {r.status_code}: {r.text[:500]}")
-        data = r.json()
+        data = await self._post_completion(body)
 
         return _to_sample_response(data, prompt_ids)
 
@@ -149,10 +176,7 @@ class LocalSamplingClient:
             "temperature": 1.0,
             "prompt_logprobs": 0,
         }
-        r = await self._client.post(self.vllm_url + "/v1/completions", json=body)
-        if r.status_code >= 400:
-            raise RuntimeError(f"vLLM /v1/completions -> {r.status_code}: {r.text[:500]}")
-        return _parse_prompt_logprobs(r.json(), prompt_ids)
+        return _parse_prompt_logprobs(await self._post_completion(body), prompt_ids)
 
     def compute_logprobs(self, prompt) -> list[Optional[float]]:
         import asyncio

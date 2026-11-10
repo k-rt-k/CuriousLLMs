@@ -29,7 +29,7 @@ def _client(prompt_logprobs, captured, adapter_name=None):
         })
 
     return LocalSamplingClient(
-        vllm_url="http://vllm:8000", base_model_name="base/model",
+        vllm_urls=["http://vllm:8000"], base_model_name="base/model",
         adapter_name=adapter_name, transport=httpx.MockTransport(handler),
     )
 

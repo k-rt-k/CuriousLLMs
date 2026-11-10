@@ -38,7 +38,7 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Literal, Optional, Sequence
+from typing import Any, Iterable, List, Literal, Optional, Sequence, Union
 
 import torch
 import torch.distributed as torch_dist
@@ -50,6 +50,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from local_backend.distributed import Cmd, DistContext, send_command, shard_by_tokens
 from local_backend.futures import LocalFuture, SavedPath
 from local_backend.losses import compute_loss
+from local_backend.weight_sync import normalize_urls as _normalize_urls
 from local_backend.weight_sync import sync_lora_to_vllm
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ class LocalTrainingClient:
         *,
         base_model: str,
         lora_rank: int,
-        vllm_url: str,
+        vllm_urls: Union[str, Sequence[str]],
         log_path: Optional[str] = None,
         device: Optional[str] = None,
         dtype: torch.dtype = torch.bfloat16,
@@ -110,7 +111,8 @@ class LocalTrainingClient:
         if device is None:
             device = f"cuda:{dist.local_rank}" if (dist is not None and torch.cuda.is_available()) else "cuda:0"
         self.lora_rank = lora_rank
-        self.vllm_url = vllm_url.rstrip("/")
+        # Only the driver talks to vLLM; worker ranks pass [] (sync/sampling then raise).
+        self.vllm_urls = _normalize_urls(vllm_urls)
         self.log_path = log_path or os.environ.get("LOG_DIR") or "."
         self.device = device
         self.dtype = dtype
@@ -710,7 +712,7 @@ class LocalTrainingClient:
 
         if sampler_path is None:
             return LocalSamplingClient(
-                vllm_url=self.vllm_url,
+                vllm_urls=self.vllm_urls,
                 base_model_name=self.base_model,
                 adapter_name=None,
                 tokenizer=self.tokenizer,
@@ -729,7 +731,7 @@ class LocalTrainingClient:
             sync_lora_to_vllm(
                 adapter_dir=sampler_path,
                 name=adapter_name,
-                vllm_url=self.vllm_url,
+                vllm_urls=self.vllm_urls,
                 prev_name=self._current_adapter_name,
             )
             self._current_adapter_name = adapter_name
@@ -737,13 +739,13 @@ class LocalTrainingClient:
             sync_lora_to_vllm(
                 adapter_dir=sampler_path,
                 name=adapter_name,
-                vllm_url=self.vllm_url,
+                vllm_urls=self.vllm_urls,
                 prev_name=self._current_adapter_name,
             )
             self._current_adapter_name = adapter_name
 
         return LocalSamplingClient(
-            vllm_url=self.vllm_url,
+            vllm_urls=self.vllm_urls,
             base_model_name=self.base_model,
             adapter_name=adapter_name,
             tokenizer=self.tokenizer,
@@ -755,7 +757,7 @@ class LocalTrainingClient:
 
         if sampler_path is None:
             return LocalSamplingClient(
-                vllm_url=self.vllm_url,
+                vllm_urls=self.vllm_urls,
                 base_model_name=self.base_model,
                 adapter_name=None,
                 tokenizer=self.tokenizer,
@@ -767,12 +769,12 @@ class LocalTrainingClient:
                 sync_lora_to_vllm,
                 sampler_path,
                 adapter_name,
-                self.vllm_url,
+                self.vllm_urls,
                 self._current_adapter_name,
             )
             self._current_adapter_name = adapter_name
         return LocalSamplingClient(
-            vllm_url=self.vllm_url,
+            vllm_urls=self.vllm_urls,
             base_model_name=self.base_model,
             adapter_name=adapter_name,
             tokenizer=self.tokenizer,

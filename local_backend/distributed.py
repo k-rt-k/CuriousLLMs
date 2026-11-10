@@ -59,6 +59,10 @@ class DistContext:
     # are inside a collective), so shutdown must not scatter another command.
     busy: bool = field(default=False, repr=False)
     shut_down: bool = field(default=False, repr=False)
+    # True once this rank has finished the LoRA-init broadcast in
+    # `LocalTrainingClient._init_async`. Before that, workers are blocked in
+    # the broadcast, not in `recv_command`, so a SHUTDOWN scatter would hang.
+    ready: bool = field(default=False, repr=False)
 
     @property
     def is_driver(self) -> bool:
@@ -172,8 +176,16 @@ def shutdown_workers(ctx: Optional[DistContext]) -> None:
     If a command is still in flight (the driver failed mid-protocol), the
     workers are blocked in a collective and cannot receive SHUTDOWN; we skip
     the send and rely on process teardown / the collective timeout instead.
+    The same holds before the driver's training client finished its init
+    broadcast (`ctx.ready` False): workers are still inside that broadcast.
     """
     if ctx is None or not ctx.is_driver or ctx.shut_down:
+        return
+    if not ctx.ready:
+        logger.warning(
+            "shutdown_workers: driver exited before the training-client init "
+            "broadcast; not sending SHUTDOWN (workers are torn down with the job)"
+        )
         return
     if ctx.busy:
         logger.error(

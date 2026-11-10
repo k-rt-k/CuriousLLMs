@@ -75,3 +75,18 @@ def test_apply_entropy_bonus_skipped_when_none_or_zero(coef):
     apply_entropy_bonus([g], coef, metrics)
     assert g.final_rewards_G == [1.0]
     assert not any(k.startswith("entropy/") for k in metrics)
+
+
+def test_entropy_bonus_does_not_flip_rnd_correctness():
+    """A wrong answer with a large entropy bonus must stay is_correct=False for RND."""
+    import torch
+
+    from curiosity_train import apply_entropy_bonus
+
+    threshold = 0.5
+    g = _group([[[-5.0, -5.0]], [[-0.1]]], [0.0, 1.0])  # wrong (high entropy), right
+    pre_bonus = apply_entropy_bonus([g], 1.0, {})
+    assert g.get_total_rewards()[0] >= threshold  # the bonus alone would cross it
+    is_correct = torch.tensor(pre_bonus) >= threshold
+    assert is_correct.tolist() == [False, True]
+

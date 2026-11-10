@@ -195,6 +195,8 @@ class LocalTrainingClient:
             # Every rank must start from rank 0's LoRA init, whatever its RNG did.
             for p in self._trainable_params():
                 torch_dist.broadcast(p.data, src=0)
+            # Workers now proceed to `serve_worker`; the driver may send commands.
+            self.dist.ready = True
 
     def _trainable_params(self) -> list[torch.nn.Parameter]:
         return [p for p in self.model.parameters() if p.requires_grad]

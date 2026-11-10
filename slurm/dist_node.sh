@@ -92,6 +92,11 @@ unset HF_HOME
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
+# Node-local Triton cache for vLLM AND the trainer (~/.triton may point at a
+# /scratch dir missing on this node). Set here in the parent scope because
+# launch_vllm.sh (same default) may run in a subshell whose exports are lost.
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+mkdir -p "$TRITON_CACHE_DIR"
 
 mkdir -p "$LOG_DIR"
 # Per-node vLLM log so nodes sharing LOG_DIR do not interleave.

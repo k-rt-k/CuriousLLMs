@@ -1310,10 +1310,17 @@ def apply_entropy_bonus(
     trajectory_groups_P: list[TrajectoryGroup],
     coef: float | None,
     metrics: dict[str, Any],
-) -> None:
-    """Add coef * entropy bonus to each trajectory's final_rewards_G in place; no-op if coef is None or <= 0."""
+) -> list[float]:
+    """Add coef * entropy bonus to each trajectory's final_rewards_G in place; no-op if coef is None or <= 0.
+
+    Returns the flat (B*G) per-trajectory total rewards from BEFORE the bonus, so
+    callers that need task correctness (the RND block) are not fooled by the bonus.
+    """
+    pre_bonus_total_rewards = [
+        r for traj_group in trajectory_groups_P for r in traj_group.get_total_rewards()
+    ]
     if coef is None or coef <= 0.0:
-        return
+        return pre_bonus_total_rewards
     # The bonus uses sampler logprobs and assumes sampling temperature 1.0.
     with timed("compute_entropy_bonus", metrics):
         entropy_bonuses_P = compute_entropy_bonus(trajectory_groups_P)
@@ -1327,6 +1334,7 @@ def apply_entropy_bonus(
         metrics["entropy/bonus_std"] = float(np.std(all_bonuses)) if all_bonuses else 0.0
         metrics["entropy/bonus_coef"] = coef
         logger.info(f"Applied entropy bonus: mean={mean:.4f}, coef={coef}")
+    return pre_bonus_total_rewards
 
 
 @scope
@@ -1523,8 +1531,9 @@ async def prepare_minibatch(
     # END SEMANTIC_RND CODE
 
     # BEGIN ENTROPY_BONUS CODE
-    # Applied to final_rewards_G (independent of RND), before the RND block and compute_advantages
-    apply_entropy_bonus(trajectory_groups_P, entropy_bonus_coef, metrics)
+    # Applied to final_rewards_G (independent of RND), before the RND block and compute_advantages.
+    # The returned pre-bonus totals are what the RND block uses for correctness.
+    extrinsic_rewards_pre_bonus_BG = apply_entropy_bonus(trajectory_groups_P, entropy_bonus_coef, metrics)
     # END ENTROPY_BONUS CODE
 
     # BEGIN SEMANTIC_RND CODE
@@ -1555,15 +1564,12 @@ async def prepare_minibatch(
             B = len(problems_B)
             G = len(responses_BG) // B  # Number of rollouts per problem
             
-            # Get current extrinsic rewards for determining correctness
-            # Use get_total_rewards() to get actual rewards (per-step + final group rewards)
-            # final_rewards_G is just the group reward (often 0.0), not the per-step rewards
-            extrinsic_rewards_BG = []
-            for traj_group in trajectory_groups_P:
-                extrinsic_rewards_BG.extend(traj_group.get_total_rewards())
-            extrinsic_rewards_BG = torch.tensor(extrinsic_rewards_BG, device=novelty_model.device)
-            # Note: Entropy bonus is now applied before this block and is already included
-            # in final_rewards_G (and thus in get_total_rewards())
+            # Extrinsic rewards for determining correctness: get_total_rewards()
+            # (per-step + final group rewards) captured BEFORE the entropy bonus,
+            # so a wrong answer with a large bonus is never counted as correct.
+            extrinsic_rewards_BG = torch.tensor(
+                extrinsic_rewards_pre_bonus_BG, device=novelty_model.device
+            )
 
             # Encode problems and responses separately
             problem_embeddings_B, response_embeddings_BG = novelty_model.encode_problems_responses_separately(

@@ -312,6 +312,9 @@ async def _entry(cli_config: CLIConfig):
         await cli_main(cli_config)
     finally:
         # Releases the workers whether the driver finished or failed (no-op if single-process).
+        # If the driver failed before its training client finished the init broadcast,
+        # this only logs: the exception exits rank 0 non-zero and torchrun/srun tears
+        # down the workers still blocked in that broadcast.
         shutdown_workers(get_context())
 
 

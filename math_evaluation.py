@@ -1008,12 +1008,13 @@ async def main(config: EvalConfig):
             "math_evaluation.py is single-process; run it with python, not torchrun (WORLD_SIZE>1)."
         )
 
-    # Create service client (vLLM-backed). For the local backend base_url=None lets
-    # it fall back to $VLLM_URLS, then $VLLM_URL.
-    logger.info("Initializing local vLLM service client...")
+    # Create service client. base_url=None for both backends: Tinker uses its
+    # default endpoint ($VLLM_URL is a local vLLM server, never a Tinker URL); the
+    # local backend falls back to $VLLM_URLS, then $VLLM_URL.
+    logger.info(f"Initializing {config.backend} service client...")
     service_client = make_service_client(
         config.backend,
-        base_url=None if config.backend == "local" else os.environ.get("VLLM_URL"),
+        base_url=None,
         log_path=config.log_path,
         model_name=config.model_name,
     )

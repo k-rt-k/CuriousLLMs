@@ -113,6 +113,15 @@ def _proc(rank, world_size, port, model_dir, out_dir, scenario, n_datums, load_p
     ctx = init_distributed()
     assert (ctx is None) == (world_size == 1)
 
+    if scenario == "pre_init_raise" and rank == 0:
+        # Driver fails before building its training client; the worker is
+        # already blocked in the LoRA-init broadcast. shutdown_workers must not
+        # scatter SHUTDOWN (it would never match and hang until the timeout).
+        try:
+            raise RuntimeError("driver failure before init")
+        finally:
+            shutdown_workers(ctx)
+
     # Different RNG per rank: replicas agree only via the rank-0 init broadcast.
     torch.manual_seed(rank)
     client = LocalTrainingClient(
@@ -380,3 +389,14 @@ def test_driver_exception_terminates_workers(tiny_model_dir, tmp_path, monkeypat
     assert time.monotonic() - t0 < 60
     # The worker left serve_worker via SHUTDOWN (not via spawn's terminate).
     assert Path(tmp_path, "worker_exit_ws2_r1").exists()
+
+
+def test_driver_failure_before_init_does_not_hang(tiny_model_dir, tmp_path, monkeypatch):
+    """Rank 0 raises before its training client's init broadcast: it must exit
+    promptly (spawn then tears the worker down), not hang in a SHUTDOWN scatter
+    until LOCAL_DIST_TIMEOUT_S."""
+    monkeypatch.setenv("LOCAL_DIST_TIMEOUT_S", "120")
+    t0 = time.monotonic()
+    with pytest.raises(mp.ProcessRaisedException, match="driver failure before init"):
+        _run(2, tiny_model_dir, tmp_path, scenario="pre_init_raise")
+    assert time.monotonic() - t0 < 60

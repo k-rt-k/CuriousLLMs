@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lean-rl-vllm-plugin"
+version = "0.1.0"
+description = "vLLM general plugin: let LoRA adapt gpt-oss lm_head"
+requires-python = ">=3.10"
+
+[project.entry-points."vllm.general_plugins"]
+lean_rl_gpt_oss_lm_head = "lean_rl_vllm_plugin:register"
+
+[tool.setuptools]
+packages = ["lean_rl_vllm_plugin"]

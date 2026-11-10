@@ -31,7 +31,8 @@ unchanged via the git submodule.
 
 Two changes were applied to the `clm` micromamba env to make `openai/gpt-oss-20b`
 LoRA training work end-to-end on vLLM 0.20.2. **Both are env-local, not in this
-repo.** If you recreate the env, re-apply both.
+repo.** If you recreate the env, re-apply both. A third, optional one (section 3) is
+only needed to LoRA-adapt gpt-oss `lm_head`.
 
 ### 1. DeepGEMM (Hopper FP8 fast path for MoE)
 
@@ -70,6 +71,21 @@ cp "$F" "$F.orig"   # idempotent if .orig already exists
 
 Revert via `cp "$F.orig" "$F"`. Upstream tracking: vLLM PR #40338 / bnellnm
 suggested this `.contiguous()` bandaid; not merged as of vLLM main on 2026-05-12.
+
+### 3. gpt-oss `lm_head` LoRA plugin (optional)
+
+vLLM's `GptOssForCausalLM` declares no `embedding_modules`, so adapters containing
+`lm_head` are rejected. `lean_rl/vllm_plugin` is a vLLM general plugin that sets
+`embedding_modules = {"lm_head": "output_embeddings"}`. Install it into the env that
+runs vLLM and enable it with `VLLM_PLUGINS` (vLLM loads plugins in every process):
+
+```bash
+pip install -e lean_rl/vllm_plugin
+export VLLM_PLUGINS=lean_rl_gpt_oss_lm_head   # before `vllm serve`
+```
+
+Whether served logprobs match HF with expert/`lm_head` adapters is checked by
+`python -m lean_rl.tools.spike_lora_serving` (see its docstring).
 
 ## Setup
 

@@ -288,6 +288,63 @@ echo "RL job: $J2 (will start after $J1 succeeds)"
 
 ---
 
+## Lean local trainer
+
+`lean_rl/` is a purpose-built local RL loop for Babel (`python -m lean_rl.train key=value ...`, chz config). It matches
+Tinker only in hyperparameters and loss (token-sum PPO / importance sampling, group-centered advantages, LoRA rank 32 /
+alpha 32 on attention + MLP/experts + `lm_head`). The older `local_backend/` path (`math_train.py backend=local`,
+`sbatch_train*.sh`) still exists and is unchanged; use `slurm/sbatch_lean.sh` for the new trainer.
+
+Topology: node 0 runs the only vLLM on GPUs `0..VLLM_TP_SIZE-1`; trainer ranks take the remaining GPUs of node 0 and all
+GPUs of every other node (`torchrun` c10d rendezvous, one `srun` task per node). KL/reference logprobs are computed in the
+trainer. Preemption: SIGTERM is forwarded to the trainer, which saves a checkpoint at the next step boundary and exits 0;
+the launcher then stops vLLM. A requeued job resumes from the same `LOG_DIR` (`/data/hf_cache/ksnair/CuriousLLMs_logs/<jobid>-<model>`).
+
+```bash
+mkdir -p /home/ksnair/CuriousLLMs_logs   # once
+
+# Qwen3-8B, 1 node, replicated trainer (vLLM on GPU 0, 7 trainer ranks) -- fits 48 GB cards
+sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
+
+# gpt-oss-20b on 80 GB+ cards, replicated; lm_head plugin on (requires the plugin install, see below)
+sbatch --gres=gpu:A100_80GB:4 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,GPT_OSS_LM_HEAD=1 slurm/sbatch_lean.sh
+
+# gpt-oss-20b on 8x48 GB: FSDP2 shards the frozen base across the trainer ranks
+sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FSDP=1 slurm/sbatch_lean.sh
+
+# multi-node (FSDP and replicated both work across nodes; vLLM stays on node 0)
+sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FSDP=1 slurm/sbatch_lean.sh
+```
+
+Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
+`GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
+`VLLM_GPU_MEM_FRAC` (0.85), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`),
+`GPT_OSS_LM_HEAD` (0|1), `LOG_DIR`, `DRY_RUN` (1 prints topology and per-node `torchrun` lines). Passed through only when
+set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
+(RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` with a gpt-oss model sets
+`VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` for the trainer; gpt-oss also gets
+`LOCAL_ATTN_IMPL=eager`.
+
+GPU sizing (design targets; GPU smoke runs of each row are pending):
+
+| Model | GPUs | Trainer mode | Notes |
+| --- | --- | --- | --- |
+| Qwen3-8B | 48 GB (L40S / A6000 / 6000 Ada) | replicated (default) | bf16 base + LoRA fits per rank |
+| gpt-oss-20b | 80 GB+ (A100-80GB / H100 / H200 / RTX PRO 6000 96 GB) | replicated | trainer holds the MXFP4-dequantized bf16 base per rank; vLLM serves MXFP4 |
+| gpt-oss-20b | 8 x 48 GB | `fsdp=True` | base sharded across trainer ranks |
+
+Documented mismatches with Tinker (also logged at trainer startup):
+
+- **MoE per-expert LoRA rank.** PEFT/vLLM give each expert its own rank-`r` LoRA. Tinker's per-expert rank for production
+  MoE LoRA is undocumented (its LoRA blog experiment used total rank / active experts), so the equivalence is unverified.
+- **gpt-oss `lm_head`.** vLLM 0.20.2 rejects adapters with `lm_head` for gpt-oss. `lm_head` LoRA is trained only when the
+  `lean_rl/vllm_plugin` plugin is installed, enabled (`GPT_OSS_LM_HEAD=1`) and passes the GPU spike
+  (`python -m lean_rl.tools.spike_lora_serving`); otherwise gpt-oss trains without `lm_head` LoRA.
+- Sampler (vLLM) vs trainer (HF) logprob numerics differ; the mean |delta| is logged per step. The loss ratio and entropy
+  bonus use sampler logprobs, as on Tinker; only KL/reference logprobs come from the trainer.
+
+---
+
 ## CLI reference
 
 ### `format_train.py`
@@ -394,6 +451,7 @@ pytest tests/ -q
 | `slurm/sbatch_train.sh` | SLURM wrapper for stage 2 (small models, co-resident) |
 | `slurm/sbatch_train_bigmodel.sh` | SLURM wrapper for stage 2 (big models, GPU split) |
 | `slurm/sbatch_eval.sh` | SLURM wrapper for stage 3 |
+| `slurm/sbatch_lean.sh` | SLURM wrapper for the lean local trainer (`lean_rl/`), 1..N nodes, vLLM on node 0 |
 | `slurm/launch_vllm.sh` | Sourced helper that boots vLLM with the right flags |
 | `slurm/README.md` | Operator notes + DeepGEMM / lora_shrink_op env patches |
 | `tinker-cookbook/` | Submodule: math envs, renderers, RL types, supervised helpers |

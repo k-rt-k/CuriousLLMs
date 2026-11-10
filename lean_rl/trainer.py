@@ -4,6 +4,11 @@ Datum convention (cookbook ``assemble_training_data``): ``model_input`` holds th
 tokens; ``loss_fn_inputs`` has ``target_tokens`` [T], ``logprobs`` [T] (sampler logprob of
 each target), ``advantages`` [T] and ``mask`` [T] (1 on response tokens).
 
+Memory: target logprobs are computed from the backbone's hidden states by running the
+(PEFT-wrapped) ``lm_head`` + log-softmax-gather over chunks of ``logprob_chunk_tokens`` real
+tokens, each chunk under activation checkpointing, so the full [B, T, V] logits never exist;
+the decoder layers use HF gradient checkpointing (``gradient_checkpointing=True``).
+
 Data is packed in order into right-padded micro-batches of at most ``micro_batch_tokens``
 padded tokens (always at least one datum). The loss is the SUM over micro-batches of
 ``token_sum_loss`` -- no normalisation anywhere, as in Tinker.
@@ -18,6 +23,7 @@ from typing import Any, Iterator, Literal, Sequence
 
 import tinker
 import torch
+from torch.utils.checkpoint import checkpoint
 from peft import PeftConfig, get_peft_model, load_peft_weights, set_peft_model_state_dict
 from transformers import AutoModelForCausalLM
 
@@ -78,6 +84,8 @@ class Trainer:
         dist: Any | None = None,
         fsdp: bool = False,
         micro_batch_tokens: int = 16384,
+        logprob_chunk_tokens: int = 2048,
+        gradient_checkpointing: bool = True,
     ):
         if dist is not None or fsdp:
             raise NotImplementedError("multi-rank DP/FSDP is not implemented yet (Task 5)")
@@ -86,10 +94,16 @@ class Trainer:
         self.device = device
         self.dtype = dtype
         self.micro_batch_tokens = micro_batch_tokens
+        self.logprob_chunk_tokens = logprob_chunk_tokens
 
         base = AutoModelForCausalLM.from_pretrained(base_model, torch_dtype=dtype).to(device)
         for p in base.parameters():
             p.requires_grad = False
+        if getattr(base.config, "final_logit_softcapping", None):
+            raise NotImplementedError("final_logit_softcapping is not supported by chunked logprobs")
+        if gradient_checkpointing and base.supports_gradient_checkpointing:
+            base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            base.enable_input_require_grads()
         placement = lora_placement(
             base, train_unembed=train_unembed, gpt_oss_lm_head=gpt_oss_lm_head
         )
@@ -97,7 +111,12 @@ class Trainer:
         log_parity_warnings(placement, model_type)
         self.placement = placement
         self.model = get_peft_model(base, make_lora_config(placement, rank))
-        self.model.eval()  # dropout is 0; train/eval mode never changes the math here
+        # Dropout is 0, so train/eval only toggles HF gradient checkpointing; train mode is
+        # entered just for the grad-enabled forward in _forward_backward.
+        self.model.eval()
+        inner = self.model.get_base_model()
+        self._decoder = inner.get_decoder()
+        self._lm_head = inner.get_output_embeddings()  # PEFT LoRA wrapper when adapted
 
         self.optimizer: torch.optim.AdamW | None = None
         self._init_snapshot: dict[str, torch.Tensor] | None = None
@@ -135,8 +154,24 @@ class Trainer:
             tgt[b, : len(y)] = torch.tensor(y)
             attn[b, : len(x)] = 1
         ids, tgt, attn = ids.to(self.device), tgt.to(self.device), attn.to(self.device)
-        logits = self.model(input_ids=ids, attention_mask=attn, use_cache=False).logits.float()
-        return logits.gather(-1, tgt.unsqueeze(-1)).squeeze(-1) - torch.logsumexp(logits, dim=-1)
+        hidden = self._decoder(input_ids=ids, attention_mask=attn, use_cache=False).last_hidden_state
+        real = attn.bool()
+        h, t = hidden[real], tgt[real]  # [N, H], [N]: only real (unpadded) positions
+        grad = torch.is_grad_enabled()
+        parts = []
+        for s in range(0, h.shape[0], self.logprob_chunk_tokens):
+            hc, tc = h[s : s + self.logprob_chunk_tokens], t[s : s + self.logprob_chunk_tokens]
+            if grad:
+                # Only hc is saved; the chunk's [n, V] logits are recomputed in backward.
+                parts.append(checkpoint(self._chunk_logp, hc, tc, use_reentrant=False))
+            else:
+                parts.append(self._chunk_logp(hc, tc))
+        logp = torch.cat(parts)
+        return logp.new_zeros(B, T).masked_scatter(real, logp)
+
+    def _chunk_logp(self, h: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        logits = self._lm_head(h).float()
+        return logits.gather(-1, t.unsqueeze(-1)).squeeze(-1) - torch.logsumexp(logits, dim=-1)
 
     @contextmanager
     def _adapter_mode(self, which: Which) -> Iterator[None]:
@@ -186,30 +221,40 @@ class Trainer:
         n_resp = 0.0
         gap_sum = 0.0
         pairs = [self._pair(d) for d in data]
-        for group in _pack([len(x) for x, _ in pairs], self.micro_batch_tokens):
-            new_logp = self._forward_logp([pairs[i] for i in group])
-            B, T = new_logp.shape
-            samp = torch.zeros(B, T)
-            adv = torch.zeros(B, T)
-            mask = torch.zeros(B, T)
-            for b, i in enumerate(group):
-                n = len(pairs[i][0])
-                samp[b, :n] = _td(data[i], "logprobs", torch.float32)
-                adv[b, :n] = _td(data[i], "advantages", torch.float32)
-                mask[b, :n] = _td(data[i], "mask", torch.float32)
-            samp, adv, mask = (t.to(self.device) for t in (samp, adv, mask))
-            loss = token_sum_loss(loss_fn, new_logp, samp, adv, mask)  # type: ignore[arg-type]
-            loss.backward()
-            with torch.no_grad():
-                loss_sum += float(loss.item())
-                n_resp += float(mask.sum().item())
-                gap = (new_logp.detach() - samp).abs()
-                gap_sum += float(torch.where(mask > 0, gap, torch.zeros_like(gap)).sum().item())
+        self.model.train()  # activates HF gradient checkpointing; dropout is 0
+        try:
+            for group in _pack([len(x) for x, _ in pairs], self.micro_batch_tokens):
+                stats = self._fwd_bwd_group(data, pairs, group, loss_fn)
+                loss_sum += stats[0]
+                n_resp += stats[1]
+                gap_sum += stats[2]
+        finally:
+            self.model.eval()
         return {
             "loss": loss_sum,
             "response_tokens": n_resp,
             "logprob_gap/sampler_vs_trainer_mean_abs": gap_sum / max(n_resp, 1.0),
         }
+
+    def _fwd_bwd_group(self, data, pairs, group, loss_fn) -> tuple[float, float, float]:
+        """Forward+backward one micro-batch; returns (loss sum, response tokens, |gap| sum)."""
+        new_logp = self._forward_logp([pairs[i] for i in group])
+        B, T = new_logp.shape
+        samp = torch.zeros(B, T)
+        adv = torch.zeros(B, T)
+        mask = torch.zeros(B, T)
+        for b, i in enumerate(group):
+            n = len(pairs[i][0])
+            samp[b, :n] = _td(data[i], "logprobs", torch.float32)
+            adv[b, :n] = _td(data[i], "advantages", torch.float32)
+            mask[b, :n] = _td(data[i], "mask", torch.float32)
+        samp, adv, mask = (t.to(self.device) for t in (samp, adv, mask))
+        loss = token_sum_loss(loss_fn, new_logp, samp, adv, mask)  # type: ignore[arg-type]
+        loss.backward()
+        with torch.no_grad():
+            gap = (new_logp.detach() - samp).abs()
+            gap_sum = torch.where(mask > 0, gap, torch.zeros_like(gap)).sum()
+            return float(loss.item()), float(mask.sum().item()), float(gap_sum.item())
 
     def _ensure_optimizer(self) -> torch.optim.AdamW:
         if self.optimizer is None:
@@ -253,7 +298,9 @@ class Trainer:
 
     # ------------------------------------------------------------------ adapters / state
     def save_adapter(self, path: str) -> None:
-        self.model.save_pretrained(path)
+        # save_embedding_layers=False: with lm_head in target_modules PEFT's "auto" would also
+        # write the full lm_head.base_layer weight, which vLLM rejects and which is huge.
+        self.model.save_pretrained(path, save_embedding_layers=False)
 
     def snapshot_init_adapter(self) -> None:
         self._init_snapshot = {n: t.cpu() for n, t in self._lora_copy().items()}
@@ -291,5 +338,6 @@ class Trainer:
         self.optimizer = None
         if d.get("optimizer") is not None:
             self._ensure_optimizer().load_state_dict(copy.deepcopy(d["optimizer"]))
-        self._init_snapshot = d.get("init_snapshot")
+        snap = d.get("init_snapshot")
+        self._init_snapshot = None if snap is None else {n: t.clone() for n, t in snap.items()}
         self.step = int(d.get("step", 0))

@@ -285,3 +285,40 @@ def test_gpt_oss_expert_lora_gets_grads(tmp_path):
     assert expert
     for n, p in expert.items():
         assert p.grad is not None and p.grad.abs().sum() > 0, n
+
+
+def test_save_adapter_has_only_lora_keys(tiny_model_dir, tmp_path):
+    from safetensors import safe_open
+
+    tr = _trainer(tiny_model_dir)
+    p = tmp_path / "adapter"
+    tr.save_adapter(str(p))
+    with safe_open(str(p / "adapter_model.safetensors"), framework="pt") as f:
+        keys = list(f.keys())
+    assert not [k for k in keys if "base_layer" in k]
+    assert any("lm_head" in k and "lora_A" in k for k in keys)
+    assert any("lm_head" in k and "lora_B" in k for k in keys)
+
+
+def test_chunked_logprobs_and_checkpointing_exact(tiny_model_dir):
+    """Small logprob chunks / no gradient checkpointing give the same loss and grads."""
+    data = _make_data(lengths=(3, 40, 7))
+    out = []
+    for kw in ({}, {"logprob_chunk_tokens": 5}, {"gradient_checkpointing": False}):
+        tr = _trainer(tiny_model_dir, **kw)
+        _perturb_lora_b(tr.model)
+        m = tr._forward_backward(data, "ppo")
+        out.append((m, _grads(tr.model), tr.logprobs(data, "policy")))
+        assert not tr.model.training
+    m0, g0, lp0 = out[0]
+    assert any("lm_head" in n for n in g0)
+    # Chunking changes fp32 accumulation order in the lm_head matmul/backward; grads are token
+    # sums of magnitude ~10, so compare at 1e-6 relative to the gradient scale.
+    scale = max(1.0, max(float(x.abs().max()) for x in g0.values()))
+    for m, g, lp in out[1:]:
+        assert math.isclose(m["loss"], m0["loss"], abs_tol=1e-6, rel_tol=1e-6)
+        for n in g0:
+            torch.testing.assert_close(g[n], g0[n], atol=1e-6 * scale, rtol=0,
+                                       msg=lambda s, n=n: f"{n}: {s}")
+        for a, b in zip(lp, lp0):
+            torch.testing.assert_close(a, b, atol=1e-6, rtol=0)

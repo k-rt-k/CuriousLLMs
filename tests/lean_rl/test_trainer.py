@@ -77,11 +77,14 @@ def _with_datum_field(data, key, fn):
     return out
 
 
-def test_rejects_dist_and_fsdp(tiny_model_dir):
-    with pytest.raises(NotImplementedError):
-        _trainer(tiny_model_dir, dist=object())
-    with pytest.raises(NotImplementedError):
-        _trainer(tiny_model_dir, fsdp=True)
+def test_single_rank_dist_and_fsdp_fallback(tiny_model_dir):
+    from lean_rl.dist import DistInfo
+
+    # fsdp needs >1 rank: ignored single-process; a 1-rank DistInfo is treated as no dist.
+    tr = _trainer(tiny_model_dir, fsdp=True, dist=DistInfo(0, 1, 0, True))
+    assert tr.fsdp is False and tr.dist is None
+    with pytest.raises(RuntimeError, match="init_dist"):
+        _trainer(tiny_model_dir, dist=DistInfo(0, 2, 0, True))
 
 
 @pytest.mark.parametrize("loss_fn", ["importance_sampling", "ppo"])

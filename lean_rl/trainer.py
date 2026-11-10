@@ -1,4 +1,4 @@
-"""Single-process batched LoRA trainer matching Tinker's hyperparameters and token-sum loss.
+"""Batched LoRA trainer matching Tinker's hyperparameters and token-sum loss.
 
 Datum convention (cookbook ``assemble_training_data``): ``model_input`` holds the T input
 tokens; ``loss_fn_inputs`` has ``target_tokens`` [T], ``logprobs`` [T] (sampler logprob of
@@ -12,6 +12,28 @@ the decoder layers use HF gradient checkpointing (``gradient_checkpointing=True`
 Data is packed in order into right-padded micro-batches of at most ``micro_batch_tokens``
 padded tokens (always at least one datum). The loss is the SUM over micro-batches of
 ``token_sum_loss`` -- no normalisation anywhere, as in Tinker.
+
+Multi-rank (``dist`` from ``lean_rl.dist.init_dist``), SPMD: every rank calls ``train_step`` /
+``logprobs`` with the same full data list and works on its token-balanced shard
+(``lean_rl.dist.shard``). Gradients are SUMMED over ranks, never averaged, so the update
+equals the single-process token-sum update.
+
+- Replicated (default): full model per rank; rank 0's initial LoRA is broadcast at init; after
+  backward the LoRA grads are SUM-all-reduced and every rank takes the identical AdamW step.
+- ``fsdp=True``: FSDP2 ``fully_shard`` per decoder layer + a root over the remaining modules,
+  ``MixedPrecisionPolicy(param_dtype=dtype, reduce_dtype=fp32)``, LoRA params kept fp32 and
+  sharded, gradient divide factor 1 with SUM-only reductions. Every rank runs the same number
+  of forwards/backwards (ranks with fewer or no micro-batches run zero-loss 1-token dummies).
+
+Multi-rank contract -- EVERY rank must call these, in the same order, with the same args:
+``train_step`` / ``_forward_backward``, ``logprobs`` (result on rank 0, None elsewhere),
+``save_adapter`` (only rank 0 writes; FSDP gathers the LoRA shards), ``snapshot_init_adapter``
+and ``state_dict_for_ckpt`` (FSDP gathers; every rank gets the full dict, save it on rank 0),
+``load_adapter`` / ``load_ckpt_state`` (every rank reads the same file / dict; no
+communication, but skipping a rank desyncs replicas or leaves its shards stale).
+In replicated mode save_adapter / snapshot / state_dict_for_ckpt happen to be local, but call
+them on all ranks anyway so the code is mode-independent. ``as_ref_client`` computes on the
+calling rank alone: fine in replicated mode; under FSDP every rank must make the same calls.
 """
 
 from __future__ import annotations
@@ -23,10 +45,14 @@ from typing import Any, Iterator, Literal, Sequence
 
 import tinker
 import torch
+import torch.distributed as tdist
+import torch.nn as nn
+from torch.distributed.tensor import DTensor, distribute_tensor
 from torch.utils.checkpoint import checkpoint
 from peft import PeftConfig, get_peft_model, load_peft_weights, set_peft_model_state_dict
 from transformers import AutoConfig, AutoModelForCausalLM
 
+from lean_rl import dist as ldist
 from lean_rl.losses import token_sum_loss
 from lean_rl.lora import log_parity_warnings, lora_placement, make_lora_config
 
@@ -34,9 +60,18 @@ logger = logging.getLogger(__name__)
 
 Which = Literal["policy", "base", "init"]
 
+# Replicated grad all-reduce bucket size (elements).
+_BUCKET_NUMEL = 1 << 26
+# Dummy micro-batch for ranks that must join FSDP collectives without data of their own.
+_DUMMY_PAIR: tuple[list[int], list[int]] = ([0], [0])
+
 
 def _td(datum: tinker.Datum, key: str, dtype: torch.dtype) -> torch.Tensor:
     return datum.loss_fn_inputs[key].to_torch().to(dtype)
+
+
+def _full(t: torch.Tensor) -> torch.Tensor:
+    return t.full_tensor() if isinstance(t, DTensor) else t
 
 
 def _pack(lengths: Sequence[int], budget: int) -> list[list[int]]:
@@ -71,6 +106,43 @@ class RefLogprobClient:
         return [None] + lp.tolist()
 
 
+class _LogpHead(nn.Module):
+    """Decoder + chunked lm_head target logprobs; the FSDP root module when ``fsdp=True``.
+
+    Running everything through one module call lets FSDP's root hooks gather the
+    embedding/norm/lm_head(+LoRA) shards once per forward; the per-chunk ``lm_head`` calls
+    (and their checkpoint recomputes) then use the already-unsharded root params.
+    """
+
+    def __init__(self, model: nn.Module, decoder: nn.Module, lm_head: nn.Module, chunk: int):
+        super().__init__()
+        self.model = model
+        # Plain attributes (not submodules): they are already registered under self.model.
+        self.__dict__["_decoder"] = decoder
+        self.__dict__["_lm_head"] = lm_head
+        self.chunk = chunk
+
+    def _chunk_logp(self, h: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        logits = self._lm_head(h).float()
+        return logits.gather(-1, t.unsqueeze(-1)).squeeze(-1) - torch.logsumexp(logits, dim=-1)
+
+    def forward(self, ids: torch.Tensor, tgt: torch.Tensor, attn: torch.Tensor) -> torch.Tensor:
+        """fp32 logprobs [N] of the targets at the N real (attention-mask) positions."""
+        hidden = self._decoder(input_ids=ids, attention_mask=attn, use_cache=False).last_hidden_state
+        real = attn.bool()
+        h, t = hidden[real], tgt[real]  # [N, H], [N]: only real (unpadded) positions
+        grad = torch.is_grad_enabled()
+        parts = []
+        for s in range(0, h.shape[0], self.chunk):
+            hc, tc = h[s : s + self.chunk], t[s : s + self.chunk]
+            if grad:
+                # Only hc is saved; the chunk's [n, V] logits are recomputed in backward.
+                parts.append(checkpoint(self._chunk_logp, hc, tc, use_reentrant=False))
+            else:
+                parts.append(self._chunk_logp(hc, tc))
+        return torch.cat(parts)
+
+
 class Trainer:
     def __init__(
         self,
@@ -81,19 +153,26 @@ class Trainer:
         dtype: torch.dtype = torch.bfloat16,
         train_unembed: bool = True,
         gpt_oss_lm_head: bool = False,
-        dist: Any | None = None,
+        dist: ldist.DistInfo | None = None,
         fsdp: bool = False,
         micro_batch_tokens: int = 16384,
         logprob_chunk_tokens: int = 2048,
         gradient_checkpointing: bool = True,
         attn_implementation: str | None = None,
     ):
-        if dist is not None or fsdp:
-            raise NotImplementedError("multi-rank DP/FSDP is not implemented yet (Task 5)")
+        if dist is not None and dist.world_size <= 1:
+            dist = None
+        if fsdp and dist is None:
+            logger.warning("fsdp=True ignored: single rank (no dist)")
+            fsdp = False
+        if dist is not None and not tdist.is_initialized():
+            raise RuntimeError("dist given but torch.distributed is not initialised (init_dist)")
         self.base_model = base_model
         self.rank = rank
         self.device = device
         self.dtype = dtype
+        self.dist = dist
+        self.fsdp = fsdp
         self.micro_batch_tokens = micro_batch_tokens
         self.logprob_chunk_tokens = logprob_chunk_tokens
 
@@ -101,9 +180,10 @@ class Trainer:
             # HF gpt-oss needs eager attention for its attention sinks.
             model_type = getattr(AutoConfig.from_pretrained(base_model), "model_type", "")
             attn_implementation = "eager" if model_type == "gpt_oss" else "sdpa"
+        # FSDP: build on CPU; fully_shard moves each layer's shards to the device.
         base = AutoModelForCausalLM.from_pretrained(
             base_model, torch_dtype=dtype, attn_implementation=attn_implementation
-        ).to(device)
+        ).to("cpu" if fsdp else device)
         for p in base.parameters():
             p.requires_grad = False
         if getattr(base.config, "final_logit_softcapping", None):
@@ -124,10 +204,96 @@ class Trainer:
         inner = self.model.get_base_model()
         self._decoder = inner.get_decoder()
         self._lm_head = inner.get_output_embeddings()  # PEFT LoRA wrapper when adapted
+        self._head = _LogpHead(self.model, self._decoder, self._lm_head, logprob_chunk_tokens)
+
+        if dist is not None:
+            self._broadcast_lora_from_rank0()
+        self._fsdp_modules: list[Any] = []
+        if fsdp:
+            self._apply_fsdp()
 
         self.optimizer: torch.optim.AdamW | None = None
         self._init_snapshot: dict[str, torch.Tensor] | None = None
         self.step = 0
+
+    # ------------------------------------------------------------------ multi-rank
+    @property
+    def is_main(self) -> bool:
+        return self.dist is None or self.dist.is_main
+
+    @torch.no_grad()
+    def _broadcast_lora_from_rank0(self) -> None:
+        """Replicas/shards start from rank 0's LoRA init whatever each rank's seed."""
+        for _, p in self._named_lora():
+            buf = p.data.to(self.device)
+            tdist.broadcast(buf, src=0)
+            p.data.copy_(buf)
+
+    def _apply_fsdp(self) -> None:
+        from torch.distributed.device_mesh import DeviceMesh
+        from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
+
+        mesh = DeviceMesh.from_group(tdist.group.WORLD, device_type=torch.device(self.device).type)
+        mp = MixedPrecisionPolicy(param_dtype=self.dtype, reduce_dtype=torch.float32)
+        for layer in self._decoder.layers:
+            fully_shard(layer, mesh=mesh, mp_policy=mp)
+        fully_shard(self._head, mesh=mesh, mp_policy=mp)
+        self._fsdp_modules = [m for m in self._head.modules() if isinstance(m, FSDPModule)]
+        for m in self._fsdp_modules:
+            # Token-sum semantics: reduce-scatter is a plain SUM (no 1/world_size, no AVG op).
+            m.set_gradient_divide_factor(1.0)
+            m.set_force_sum_reduction_for_comms(True)
+
+    def _reshard(self) -> None:
+        """Free unsharded FSDP params (the root stays unsharded after a no-grad forward).
+
+        Must precede any in-place write to the sharded LoRA params, else the next forward
+        would reuse the stale unsharded copy.
+        """
+        for m in self._fsdp_modules:
+            m.reshard()
+
+    def _sync_max(self, n: int) -> int:
+        """Max of ``n`` over ranks (FSDP only; every rank must run as many forwards)."""
+        if not self.fsdp:
+            return n
+        t = torch.tensor([n], dtype=torch.int64, device=self.device)
+        tdist.all_reduce(t, op=tdist.ReduceOp.MAX)
+        return int(t.item())
+
+    def _all_reduce_sum(self, values: list[float]) -> list[float]:
+        if self.dist is None:
+            return values
+        t = torch.tensor(values, dtype=torch.float64, device=self.device)
+        tdist.all_reduce(t, op=tdist.ReduceOp.SUM)
+        return t.tolist()
+
+    @torch.no_grad()
+    def _all_reduce_lora_grads(self) -> None:
+        """Replicated mode: SUM-all-reduce LoRA grads (a param keeps grad None on every rank
+        only if no rank produced one, matching the single-process AdamW skip)."""
+        params = self._trainable()
+        has = torch.tensor([float(p.grad is not None) for p in params], device=self.device)
+        tdist.all_reduce(has, op=tdist.ReduceOp.MAX)
+        live = [p for p, h in zip(params, has.tolist()) if h > 0]
+        for p in live:
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+        bucket: list[torch.nn.Parameter] = []
+        numel = 0
+        for p in live + [None]:  # type: ignore[list-item]
+            if p is not None and (not bucket or numel + p.numel() <= _BUCKET_NUMEL):
+                bucket.append(p)
+                numel += p.numel()
+                continue
+            if bucket:
+                flat = torch.cat([q.grad.reshape(-1).float() for q in bucket])
+                tdist.all_reduce(flat, op=tdist.ReduceOp.SUM)
+                off = 0
+                for q in bucket:
+                    q.grad.copy_(flat[off : off + q.numel()].view_as(q.grad))
+                    off += q.numel()
+            bucket, numel = ([p], p.numel()) if p is not None else ([], 0)
 
     # ------------------------------------------------------------------ params
     def _named_lora(self) -> list[tuple[str, torch.nn.Parameter]]:
@@ -137,15 +303,31 @@ class Trainer:
         return [p for _, p in self._named_lora()]
 
     def _lora_copy(self) -> dict[str, torch.Tensor]:
+        """Local clones (DTensor shards under FSDP); for in-memory swaps only."""
         return {n: p.detach().clone() for n, p in self._named_lora()}
+
+    def _lora_full(self) -> dict[str, torch.Tensor]:
+        """Full fp CPU copies of the LoRA params (collective under FSDP)."""
+        return {n: _full(p.detach()).to("cpu", copy=True) for n, p in self._named_lora()}
 
     @torch.no_grad()
     def _lora_assign(self, tensors: dict[str, torch.Tensor]) -> None:
+        """Copy full tensors (or same-layout local clones) into the live LoRA params."""
         named = dict(self._named_lora())
         if set(named) != set(tensors):
             raise KeyError("LoRA parameter names do not match")
+        self._reshard()
         for n, p in named.items():
-            p.copy_(tensors[n].to(device=p.device, dtype=p.dtype))
+            t = tensors[n]
+            if isinstance(p, DTensor) and not isinstance(t, DTensor):
+                # Every rank holds the full tensor: take the local shard, no communication.
+                t = distribute_tensor(
+                    t.to(device=p.device, dtype=p.dtype), p.device_mesh, p.placements,
+                    src_data_rank=None,
+                )
+                p.copy_(t)
+            else:
+                p.copy_(t.to(device=p.device, dtype=p.dtype))
 
     # ------------------------------------------------------------------ forward
     def _forward_logp(self, pairs: Sequence[tuple[list[int], list[int]]]) -> torch.Tensor:
@@ -161,24 +343,8 @@ class Trainer:
             tgt[b, : len(y)] = torch.tensor(y)
             attn[b, : len(x)] = 1
         ids, tgt, attn = ids.to(self.device), tgt.to(self.device), attn.to(self.device)
-        hidden = self._decoder(input_ids=ids, attention_mask=attn, use_cache=False).last_hidden_state
-        real = attn.bool()
-        h, t = hidden[real], tgt[real]  # [N, H], [N]: only real (unpadded) positions
-        grad = torch.is_grad_enabled()
-        parts = []
-        for s in range(0, h.shape[0], self.logprob_chunk_tokens):
-            hc, tc = h[s : s + self.logprob_chunk_tokens], t[s : s + self.logprob_chunk_tokens]
-            if grad:
-                # Only hc is saved; the chunk's [n, V] logits are recomputed in backward.
-                parts.append(checkpoint(self._chunk_logp, hc, tc, use_reentrant=False))
-            else:
-                parts.append(self._chunk_logp(hc, tc))
-        logp = torch.cat(parts)
-        return logp.new_zeros(B, T).masked_scatter(real, logp)
-
-    def _chunk_logp(self, h: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        logits = self._lm_head(h).float()
-        return logits.gather(-1, t.unsqueeze(-1)).squeeze(-1) - torch.logsumexp(logits, dim=-1)
+        logp = self._head(ids, tgt, attn)
+        return logp.new_zeros(B, T).masked_scatter(attn.bool(), logp)
 
     @contextmanager
     def _adapter_mode(self, which: Which) -> Iterator[None]:
@@ -200,43 +366,99 @@ class Trainer:
             raise ValueError(f"Unknown which={which!r}")
 
     def _logprobs_for(
-        self, pairs: Sequence[tuple[list[int], list[int]]], which: Which
+        self, pairs: Sequence[tuple[list[int], list[int]]], which: Which, *, sync: bool = False
     ) -> list[torch.Tensor]:
+        """Local logprobs. ``sync`` (FSDP): pad with dummy forwards to the max group count."""
         out: list[torch.Tensor | None] = [None] * len(pairs)
+        groups = _pack([len(x) for x, _ in pairs], self.micro_batch_tokens) if pairs else []
+        n_calls = self._sync_max(len(groups)) if sync else len(groups)
         with torch.no_grad(), self._adapter_mode(which):
-            for group in _pack([len(x) for x, _ in pairs], self.micro_batch_tokens):
-                logp = self._forward_logp([pairs[i] for i in group])
-                for b, i in enumerate(group):
-                    out[i] = logp[b, : len(pairs[i][0])].float().cpu()
+            try:
+                for k in range(n_calls):
+                    if k >= len(groups):
+                        self._forward_logp([_DUMMY_PAIR])
+                        continue
+                    group = groups[k]
+                    logp = self._forward_logp([pairs[i] for i in group])
+                    for b, i in enumerate(group):
+                        out[i] = logp[b, : len(pairs[i][0])].float().cpu()
+            finally:
+                self._reshard()
         return out  # type: ignore[return-value]
 
     @staticmethod
     def _pair(datum: tinker.Datum) -> tuple[list[int], list[int]]:
         return datum.model_input.to_ints(), _td(datum, "target_tokens", torch.long).tolist()
 
-    def logprobs(self, data: list[tinker.Datum], which: Which) -> list[torch.Tensor]:
-        """Per-datum fp32 CPU logprobs of ``target_tokens`` under the chosen weights."""
-        return self._logprobs_for([self._pair(d) for d in data], which)
+    def logprobs(self, data: list[tinker.Datum], which: Which) -> list[torch.Tensor] | None:
+        """Per-datum fp32 CPU logprobs of ``target_tokens`` under the chosen weights.
+
+        Multi-rank: all ranks call with the same ``data``; each computes its shard and the
+        results are gathered to rank 0 in input order. Non-main ranks return None.
+        """
+        pairs = [self._pair(d) for d in data]
+        if self.dist is None:
+            return self._logprobs_for(pairs, which)
+        idx = ldist.shard_indices([len(x) for x, _ in pairs], self.dist)
+        local = self._logprobs_for([pairs[i] for i in idx], which, sync=self.fsdp)
+        parts = ldist.gather_object(list(zip(idx, local)))
+        if parts is None:
+            return None
+        out: list[torch.Tensor | None] = [None] * len(pairs)
+        for part in parts:
+            for i, lp in part:
+                out[i] = lp
+        assert all(o is not None for o in out)
+        return out  # type: ignore[return-value]
 
     def as_ref_client(self, which: Which) -> RefLogprobClient:
         return RefLogprobClient(self, which)
 
     # ------------------------------------------------------------------ training
     def _forward_backward(self, data: list[tinker.Datum], loss_fn: str) -> dict[str, float]:
-        """Accumulate token-sum loss grads into ``.grad`` (no zeroing, no step)."""
-        loss_sum = 0.0
-        n_resp = 0.0
-        gap_sum = 0.0
-        pairs = [self._pair(d) for d in data]
+        """Accumulate the token-sum loss grads of ``data`` into ``.grad`` (no zeroing, no step).
+
+        Multi-rank: all ranks pass the same full ``data``; each runs its shard and the grads
+        end up SUMMED over ranks (all-reduce in replicated mode, FSDP reduce-scatter
+        otherwise). Metrics are global sums on every rank.
+        """
+        pairs_all = [self._pair(d) for d in data]
+        idx = ldist.shard_indices([len(x) for x, _ in pairs_all], self.dist)
+        local = [data[i] for i in idx]
+        pairs = [pairs_all[i] for i in idx]
+        replicated = self.dist is not None and not self.fsdp
+        stash: list[torch.Tensor | None] = []
+        if replicated:
+            # Only this call's contribution is all-reduced; earlier (already reduced) grads
+            # are added back afterwards.
+            stash = [p.grad for p in self._trainable()]
+            for p in self._trainable():
+                p.grad = None
+
+        loss_sum = n_resp = gap_sum = 0.0
+        groups = _pack([len(x) for x, _ in pairs], self.micro_batch_tokens) if pairs else []
+        n_calls = self._sync_max(len(groups))
         self.model.train()  # activates HF gradient checkpointing; dropout is 0
         try:
-            for group in _pack([len(x) for x, _ in pairs], self.micro_batch_tokens):
-                stats = self._fwd_bwd_group(data, pairs, group, loss_fn)
+            for k in range(n_calls):
+                if k >= len(groups):
+                    # Join FSDP's per-layer all-gathers / reduce-scatters with a zero loss.
+                    (self._forward_logp([_DUMMY_PAIR]).sum() * 0.0).backward()
+                    continue
+                stats = self._fwd_bwd_group(local, pairs, groups[k], loss_fn)
                 loss_sum += stats[0]
                 n_resp += stats[1]
                 gap_sum += stats[2]
         finally:
             self.model.eval()
+
+        if replicated:
+            self._all_reduce_lora_grads()
+            with torch.no_grad():
+                for p, g in zip(self._trainable(), stash):
+                    if g is not None:
+                        p.grad = g if p.grad is None else p.grad.add_(g)
+        loss_sum, n_resp, gap_sum = self._all_reduce_sum([loss_sum, n_resp, gap_sum])
         return {
             "loss": loss_sum,
             "response_tokens": n_resp,
@@ -280,18 +502,19 @@ class Trainer:
         # Params without a grad are skipped by AdamW, as in torch's default behaviour.
         params = [p for p in self._trainable() if p.grad is not None]
         clip = float(adam.grad_clip_norm)
-        if not params:
-            norm = torch.zeros(())
-        elif clip > 0:
-            norm = torch.nn.utils.clip_grad_norm_(params, max_norm=clip)
-        else:
-            norm = torch.linalg.vector_norm(
-                torch.stack([torch.linalg.vector_norm(p.grad.float()) for p in params])
-            )
+        norm = 0.0
+        if params:
+            # FSDP: grads are DTensor shards; the norm is reduced across ranks by full_tensor.
+            total = torch.nn.utils.get_total_norm([p.grad for p in params])
+            total = _full(total)
+            norm = float(total)
+            if clip > 0:
+                torch.nn.utils.clip_grads_with_norm_(params, clip, total)
+        self._reshard()
         opt.step()
         opt.zero_grad(set_to_none=True)
         self.step += 1
-        return float(norm)
+        return norm
 
     def train_step(
         self, data: list[tinker.Datum], loss_fn: str, adam: tinker.AdamParams
@@ -305,35 +528,73 @@ class Trainer:
 
     # ------------------------------------------------------------------ adapters / state
     def save_adapter(self, path: str) -> None:
+        """Write the PEFT adapter dir. Multi-rank: call on ALL ranks with the same path; only
+        rank 0 writes (FSDP: the others take part in the LoRA gather). No barrier: only rank 0
+        may read ``path`` afterwards unless the caller adds one (``lean_rl.dist.barrier``)."""
         # save_embedding_layers=False: with lm_head in target_modules PEFT's "auto" would also
         # write the full lm_head.base_layer weight, which vLLM rejects and which is huge.
-        self.model.save_pretrained(path, save_embedding_layers=False)
+        if self.fsdp:
+            full = self._lora_full()
+            if self.is_main:
+                self.model.save_pretrained(path, state_dict=full, save_embedding_layers=False)
+        elif self.is_main:
+            self.model.save_pretrained(path, save_embedding_layers=False)
 
     def snapshot_init_adapter(self) -> None:
-        self._init_snapshot = {n: t.cpu() for n, t in self._lora_copy().items()}
+        """Freeze the current LoRA as the ``init`` reference (FSDP: collective, all ranks)."""
+        self._init_snapshot = self._lora_full()
 
     def load_adapter(self, path: str) -> None:
-        """Copy adapter weights from a PEFT dir into the live LoRA params; fresh optimizer."""
+        """Copy adapter weights from a PEFT dir into the live LoRA params; fresh optimizer.
+
+        Multi-rank: call on ALL ranks with the same path (shared FS); each rank reads the file
+        and keeps its replica / shard. Local (no collectives)."""
         cfg = self.model.peft_config["default"]
         saved = PeftConfig.from_pretrained(path)
         if int(saved.r) != int(cfg.r):
             raise ValueError(f"adapter rank {saved.r} != trainer rank {cfg.r}")
-        before = self._lora_copy()
-        res = set_peft_model_state_dict(self.model, load_peft_weights(path, device="cpu"))
-        missing = [k for k in getattr(res, "missing_keys", []) if "lora_" in k]
-        unexpected = list(getattr(res, "unexpected_keys", []))
-        if missing or unexpected:
-            self._lora_assign(before)
-            raise RuntimeError(f"adapter mismatch: missing={missing} unexpected={unexpected}")
+        weights = load_peft_weights(path, device="cpu")
+        if self.fsdp:
+            # PEFT's loader cannot write into DTensor params; map keys as PEFT saves them
+            # (adapter name dropped) and assign shards ourselves.
+            names = [n for n, _ in self._named_lora()]
+            key = {n: n.replace(".default", "") for n in names}
+            missing = [n for n in names if key[n] not in weights]
+            unexpected = sorted(set(weights) - set(key.values()))
+            if missing or unexpected:
+                raise RuntimeError(f"adapter mismatch: missing={missing} unexpected={unexpected}")
+            self._lora_assign({n: weights[key[n]] for n in names})
+        else:
+            before = self._lora_copy()
+            res = set_peft_model_state_dict(self.model, weights)
+            missing = [k for k in getattr(res, "missing_keys", []) if "lora_" in k]
+            unexpected = list(getattr(res, "unexpected_keys", []))
+            if missing or unexpected:
+                self._lora_assign(before)
+                raise RuntimeError(f"adapter mismatch: missing={missing} unexpected={unexpected}")
         self.optimizer = None
 
+    def _optimizer_state_full(self) -> dict | None:
+        if self.optimizer is None:
+            return None
+        sd = self.optimizer.state_dict()
+        # Full (gathered) CPU tensors: the same format with or without FSDP. Copies, since
+        # Optimizer.state_dict() returns references to the live moment tensors.
+        state = {
+            i: {k: (_full(v).to("cpu", copy=True) if isinstance(v, torch.Tensor) else copy.deepcopy(v))
+                for k, v in s.items()}
+            for i, s in sd["state"].items()
+        }
+        return {"state": state, "param_groups": copy.deepcopy(sd["param_groups"])}
+
     def state_dict_for_ckpt(self) -> dict:
+        """Full CPU state (same format with or without FSDP, so checkpoints are portable).
+
+        Multi-rank: call on ALL ranks (FSDP gathers shards); every rank gets the full dict,
+        rank 0 saves it."""
         return {
-            "lora": {n: t.cpu() for n, t in self._lora_copy().items()},
-            # deepcopy: Optimizer.state_dict() returns references to the live moment tensors.
-            "optimizer": None if self.optimizer is None else copy.deepcopy(
-                self.optimizer.state_dict()
-            ),
+            "lora": self._lora_full(),
+            "optimizer": self._optimizer_state_full(),
             "init_snapshot": None if self._init_snapshot is None else {
                 n: t.clone() for n, t in self._init_snapshot.items()
             },
@@ -341,10 +602,23 @@ class Trainer:
         }
 
     def load_ckpt_state(self, d: dict) -> None:
+        """Inverse of ``state_dict_for_ckpt``. Multi-rank: call on ALL ranks with the same
+        dict (each loads the file itself); local, each rank keeps its replica / shard."""
         self._lora_assign(d["lora"])
         self.optimizer = None
         if d.get("optimizer") is not None:
-            self._ensure_optimizer().load_state_dict(copy.deepcopy(d["optimizer"]))
+            sd = copy.deepcopy(d["optimizer"])
+            if self.fsdp:
+                params = self._trainable()  # optimizer state is indexed in this order
+                for i, s in sd["state"].items():
+                    p = params[int(i)]
+                    for k, v in s.items():
+                        if isinstance(p, DTensor) and isinstance(v, torch.Tensor) and v.shape == p.shape:
+                            s[k] = distribute_tensor(
+                                v.to(device=p.device), p.device_mesh, p.placements,
+                                src_data_rank=None,
+                            )
+            self._ensure_optimizer().load_state_dict(sd)
         snap = d.get("init_snapshot")
         self._init_snapshot = None if snap is None else {n: t.clone() for n, t in snap.items()}
         self.step = int(d.get("step", 0))

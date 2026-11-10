@@ -25,10 +25,14 @@
 #                --rdzv_backend=c10d --rdzv_id=$SLURM_JOB_ID
 #                --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT -m lean_rl.train ...
 #     Global rank 0 (any node) drives the loop and samples from node 0's vLLM.
-#   - fsdp=True (EXTRA_ARGS or FSDP=1) shards the frozen base across all trainer ranks.
+#   - FSDP=1 (-> fsdp=True; do NOT also put fsdp= in EXTRA_ARGS) shards the frozen base across
+#     all trainer ranks.
+#   - preempt_qos caps a user at 24 GPUs total; --nodes x --gres must fit under that.
+#   - Attention implementation is chosen by the trainer (eager for gpt-oss, sdpa otherwise);
+#     override with EXTRA_ARGS="attn_implementation=...".
 #
 # Examples:
-#   # Qwen3-8B, 1 node, replicated trainer (6 trainer ranks, vLLM on GPU 0):
+#   # Qwen3-8B, 1 node, replicated trainer (7 trainer ranks, vLLM on GPU 0):
 #   sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 #   # gpt-oss-20b on 80 GB+ cards, replicated, lm_head plugin on:
 #   sbatch --gres=gpu:A100_80GB:4 \
@@ -40,13 +44,17 @@
 #   sbatch --nodes=2 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 #
 # Env knobs: MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN
-# VLLM_TP_SIZE VLLM_GPU_MEM_FRAC GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(0|1) LOG_DIR
+# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(0|1) LOG_DIR
 # EXTRA_ARGS ("key=value ..." forwarded to lean_rl.train). Optional pass-through when set:
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
-# Preemption: SIGTERM -> forwarded to srun -> each node's torchrun. The trainer saves a
-# checkpoint at the next step boundary and exits 0; then vLLM is stopped. A requeued job
-# (same SLURM_JOB_ID) reuses LOG_DIR and resumes.
+# Preemption (Babel: GraceTime=0, KillWait=120 s, so the whole shutdown must fit in 120 s):
+# SIGTERM -> batch shell -> srun -> each node's worker, which sends SIGUSR1 directly to its
+# trainer rank processes (torchelastic would turn SIGTERM into SIGKILL after ~30 s and exit
+# nonzero). Each rank's PreemptionFlag saves a checkpoint at the next step boundary and the
+# ranks exit 0. Worker waits <= 90 s for torchrun, the batch shell <= 100 s for srun; then
+# vLLM is stopped and the script exits with torchrun's rc. A requeued job (same
+# SLURM_JOB_ID) reuses LOG_DIR and resumes.
 #
 # DRY_RUN=1 prints the topology and per-node commands and launches nothing.
 
@@ -67,6 +75,7 @@ cd "$REPO_DIR"
 : "${GPUS_PER_NODE:=${SLURM_GPUS_ON_NODE:-8}}"
 : "${FSDP:=0}"
 : "${GPT_OSS_LM_HEAD:=0}"
+: "${MAX_TOKENS:=2048}"
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
 
@@ -107,6 +116,7 @@ build_trainer_args() {
         group_size="$GROUP_SIZE"
         groups_per_batch="$GROUPS_PER_BATCH"
         learning_rate="$LEARNING_RATE"
+        max_tokens="$MAX_TOKENS"
         loss_fn="$LOSS_FN"
         vllm_urls="$VLLM_URLS"
         log_path="$LOG_DIR"
@@ -183,9 +193,6 @@ export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 # in a subshell whose exports are lost.
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
-# gpt-oss: HF modeling must use the eager attention path (sdpa/flash lack attention sinks).
-[[ "${(L)MODEL_NAME}" == *gpt-oss* ]] && export LOCAL_ATTN_IMPL=eager
-export LOCAL_TRAINER_GPU_MEM_FRAC=1.0   # trainer GPUs are not shared with vLLM
 
 # ---- worker: one per node, runs the trainer ranks --------------------------
 if [[ "$1" == "--worker" ]]; then
@@ -193,15 +200,38 @@ if [[ "$1" == "--worker" ]]; then
     torchrun_cmd "$SLURM_NODEID" "$NODE_NPROC"
     export CUDA_VISIBLE_DEVICES="$NODE_VISIBLE"
     echo "[lean-worker $SLURM_NODEID $(hostname -s)] CUDA_VISIBLE_DEVICES=$NODE_VISIBLE torchrun: ${TORCHRUN_CMD[*]}"
+    # Recursively list descendants of a pid (Linux pgrep -P).
+    descendants() {
+        local c
+        for c in $(pgrep -P "$1" 2>/dev/null); do echo $c; descendants $c; done
+    }
+    # torchrun (and this shell) must survive USR1; ignored dispositions are inherited, and
+    # the trainer's own signal handler replaces the ignore in the rank processes.
+    trap '' USR1
     on_term() {
         set +e
-        echo "[lean-worker $SLURM_NODEID] SIGTERM - forwarding to torchrun (it saves a checkpoint and exits)" >&2
-        [[ -n "$TRAIN_PID" ]] && kill -TERM "$TRAIN_PID" 2>/dev/null
-        [[ -n "$TRAIN_PID" ]] && wait "$TRAIN_PID" 2>/dev/null
+        echo "[lean-worker $SLURM_NODEID] SIGTERM - SIGUSR1 to trainer ranks (checkpoint at step boundary, exit 0)" >&2
+        local pids=($(descendants "$TRAIN_PID"))
+        (( ${#pids} )) && kill -USR1 $pids 2>/dev/null
+        local i
+        for (( i = 0; i < 90; i++ )); do
+            kill -0 "$TRAIN_PID" 2>/dev/null || break
+            sleep 1
+        done
+        if kill -0 "$TRAIN_PID" 2>/dev/null; then
+            echo "[lean-worker $SLURM_NODEID] torchrun still alive after 90 s - TERM" >&2
+            kill -TERM "$TRAIN_PID" 2>/dev/null
+        fi
+        wait "$TRAIN_PID" 2>/dev/null
         exit $?
     }
     trap on_term TERM
-    "${TORCHRUN_CMD[@]}" &
+    # New session: a group-wide TERM from srun/slurmstepd must not reach torchelastic.
+    if command -v setsid > /dev/null; then
+        setsid "${TORCHRUN_CMD[@]}" &
+    else
+        "${TORCHRUN_CMD[@]}" &
+    fi
     TRAIN_PID=$!
     wait $TRAIN_PID
     exit $?
@@ -229,9 +259,19 @@ trap stop_vllm EXIT INT
 on_term() {
     set +e  # errexit must not abort the handler (wait returns 143 after the kill)
     echo "[lean] SIGTERM (preempted?) - forwarding to the trainer step, then stopping vLLM" >&2
-    [[ -n "$SRUN_PID" ]] && kill -TERM "$SRUN_PID" 2>/dev/null
-    [[ -n "$SRUN_PID" ]] && wait "$SRUN_PID" 2>/dev/null
-    rc=$?
+    if [[ -n "$SRUN_PID" ]]; then
+        kill -TERM "$SRUN_PID" 2>/dev/null
+        local i
+        for (( i = 0; i < 100; i++ )); do   # KillWait is 120 s; leave room to stop vLLM
+            kill -0 "$SRUN_PID" 2>/dev/null || break
+            sleep 1
+        done
+        kill -0 "$SRUN_PID" 2>/dev/null && kill -KILL "$SRUN_PID" 2>/dev/null
+        wait "$SRUN_PID" 2>/dev/null
+        rc=$?
+    else
+        rc=0
+    fi
     stop_vllm
     exit $rc
 }
@@ -256,7 +296,7 @@ done
 echo "[lean] vLLM ready"
 
 export MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN VLLM_TP_SIZE
-export GPUS_PER_NODE FSDP GPT_OSS_LM_HEAD EXTRA_ARGS USE_LM_HEAD_PLUGIN TRAINER_GPUS_NODE0
+export MAX_TOKENS GPUS_PER_NODE FSDP GPT_OSS_LM_HEAD EXTRA_ARGS USE_LM_HEAD_PLUGIN TRAINER_GPUS_NODE0
 export MASTER_ADDR MASTER_PORT VLLM_PORT VLLM_URLS LOG_DIR REPO_DIR
 "${SRUN_CMD[@]}" &
 SRUN_PID=$!

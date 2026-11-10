@@ -317,13 +317,16 @@ sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FS
 ```
 
 Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
-`GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
-`VLLM_GPU_MEM_FRAC` (0.85), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`),
+`GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `MAX_TOKENS` (2048), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
+`VLLM_GPU_MEM_FRAC` (0.85), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
 `GPT_OSS_LM_HEAD` (0|1), `LOG_DIR`, `DRY_RUN` (1 prints topology and per-node `torchrun` lines). Passed through only when
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
 (RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` with a gpt-oss model sets
-`VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` for the trainer; gpt-oss also gets
-`LOCAL_ATTN_IMPL=eager`.
+`VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` for the trainer; The attention implementation is chosen automatically by the
+trainer (eager for gpt-oss, sdpa otherwise); override with `EXTRA_ARGS="attn_implementation=..."`.
+`preempt_qos` caps a user at 24 GPUs, so keep `--nodes` x GPUs per node under that. On preemption (GraceTime 0,
+KillWait 120 s) the launcher sends SIGUSR1 straight to each trainer rank (SIGTERM through torchelastic would be
+SIGKILLed after ~30 s); ranks checkpoint at the next step boundary and exit 0, all within ~100 s, then vLLM is stopped.
 
 GPU sizing (design targets; GPU smoke runs of each row are pending):
 

@@ -4,8 +4,10 @@ Builds a PEFT model with the Task-1 placement, randomises every ``lora_B`` (seed
 adapter is non-trivial, saves it, loads it into a running vLLM server, and compares
 teacher-forced logprobs from vLLM against HF on four fixed prompts.
 
-PASS iff mean |vLLM - HF(adapted)| <= 0.05 AND mean |HF(adapted) - HF(base)| >= 0.10
-(the second guards against an adapter that is silently a no-op on both sides).
+PASS iff the adapter has an effect on both sides (HF and vLLM adapted-vs-base mean |d| >= 0.10)
+AND (mean |vLLM - HF(adapted)| <= 0.05 OR the LoRA delta agrees: mean |(vllm_ad - vllm_base) -
+(hf_ad - hf_base)| <= 0.05, which factors out the MXFP4-vs-bf16 base gap). Every outcome,
+including a server rejecting the adapter, emits a JSON verdict with a "diagnosis" field.
 
     python -m lean_rl.tools.spike_lora_serving --model Qwen/Qwen3-8B \
         --vllm-url http://localhost:8000 --out /tmp/spike --with-lm-head
@@ -18,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -94,31 +97,68 @@ def run(args) -> dict:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     peft_model.save_pretrained(str(out))
-    load_lora([args.vllm_url], ADAPTER_NAME, str(out.resolve()))
+    verdict = {"model": args.model, "with_lm_head": bool(args.with_lm_head)}
+    try:
+        load_lora([args.vllm_url], ADAPTER_NAME, str(out.resolve()))
+    except Exception as e:  # server rejected the adapter: still emit a verdict
+        verdict.update(pass_=False, error=f"{type(e).__name__}: {e}", diagnosis="adapter rejected by vLLM")
+        return _finalize(verdict)
 
-    client = LocalSamplingClient(
+    adapted = LocalSamplingClient(
         vllm_urls=[args.vllm_url], base_model_name=args.model, adapter_name=ADAPTER_NAME
     )
-    vs_hf, effect = [], []
+    # No adapter_name -> requests use the base model name (sampling_client._model_field).
+    base = LocalSamplingClient(vllm_urls=[args.vllm_url], base_model_name=args.model)
+
+    def vllm_lp(client, ids):
+        lp = client.compute_logprobs(tinker.ModelInput.from_ints(ids))[1:]
+        return torch.tensor([float("nan") if v is None else v for v in lp])
+
+    cols = {k: [] for k in ("vs_hf", "base_gap", "delta_gap", "vllm_eff", "hf_eff")}
     for text in PROMPTS:
         ids = tok(text, add_special_tokens=True)["input_ids"]
-        vllm_lp = client.compute_logprobs(tinker.ModelInput.from_ints(ids))[1:]
-        vllm_lp = torch.tensor([float("nan") if v is None else v for v in vllm_lp])
-        hf_adapted = _hf_logprobs(peft_model, ids)
+        v_ad, v_base = vllm_lp(adapted, ids), vllm_lp(base, ids)
+        h_ad = _hf_logprobs(peft_model, ids)
         with peft_model.disable_adapter():
-            hf_base = _hf_logprobs(peft_model, ids)
-        vs_hf.append((vllm_lp - hf_adapted).abs())
-        effect.append((hf_adapted - hf_base).abs())
-    vs_hf_t, effect_t = torch.cat(vs_hf), torch.cat(effect)
-    mean_vs_hf = float(vs_hf_t.mean())  # NaN (missing logprob) propagates and fails PASS
-    mean_effect = float(effect_t.mean())
-    ok = mean_vs_hf <= MEAN_ABS_TOL and mean_effect >= MIN_ADAPTER_EFFECT
+            h_base = _hf_logprobs(peft_model, ids)
+        cols["vs_hf"].append((v_ad - h_ad).abs())
+        cols["base_gap"].append((v_base - h_base).abs())
+        cols["delta_gap"].append(((v_ad - v_base) - (h_ad - h_base)).abs())
+        cols["vllm_eff"].append((v_ad - v_base).abs())
+        cols["hf_eff"].append((h_ad - h_base).abs())
+    m = {k: float(torch.cat(v).mean()) for k, v in cols.items()}  # NaN propagates -> fails
+    verdict.update(
+        mean_abs_vs_hf=m["vs_hf"],
+        adapter_effect=m["hf_eff"],
+        vllm_effect=m["vllm_eff"],
+        base_gap=m["base_gap"],
+        lora_delta_gap=m["delta_gap"],
+    )
+    close = m["vs_hf"] <= MEAN_ABS_TOL
+    delta_ok = m["delta_gap"] <= MEAN_ABS_TOL
+    hf_ok = m["hf_eff"] >= MIN_ADAPTER_EFFECT
+    vllm_ok = m["vllm_eff"] >= MIN_ADAPTER_EFFECT
+    verdict["pass_"] = bool(hf_ok and vllm_ok and (close or delta_ok))
+    if not hf_ok:
+        diag = "HF adapter has no effect (spike invalid)"
+    elif not vllm_ok:
+        diag = "adapter not applied in vLLM"
+    elif close:
+        diag = "ok"
+    elif delta_ok:
+        diag = "base quantization gap only"
+    else:
+        diag = "lora mismatch"
+    verdict["diagnosis"] = diag
+    return _finalize(verdict)
+
+
+def _finalize(verdict: dict) -> dict:
+    """Rename pass_ -> pass and map NaN/inf to null."""
+    verdict["pass"] = verdict.pop("pass_")
     return {
-        "model": args.model,
-        "with_lm_head": bool(args.with_lm_head),
-        "mean_abs_vs_hf": mean_vs_hf,
-        "adapter_effect": mean_effect,
-        "pass": bool(ok),
+        k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+        for k, v in verdict.items()
     }
 
 

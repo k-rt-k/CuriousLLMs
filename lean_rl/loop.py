@@ -404,6 +404,13 @@ class _Loop:
         cfg = self.cfg
         _validate(cfg)
         self.r, self.device = _init_rank()
+        multi = self.r.info is not None
+        if multi:
+            from lean_rl import dist as ldist
+
+            # Fail fast: an unhandled error on any rank hard-exits every rank within seconds
+            # instead of leaving the others blocked in a collective until the dist timeout.
+            ldist.start_watchdog()
         self.comm = _Comm(self.r, self.device)
         old_handlers = {s: signal.getsignal(s) for s in PreemptionFlag.SIGNALS}
         self.flag.install()
@@ -413,16 +420,17 @@ class _Loop:
             # The Trainer is built before anything else so its parity warnings head the log.
             self.trainer = self._build_trainer()
             await self._run()
+        except BaseException as e:
+            if multi:
+                ldist.abort(e)  # never returns; before the cleanup below, which could block
+            raise
         finally:
             for s, h in old_handlers.items():
                 signal.signal(s, h)
             if self.ml_logger is not None:
                 self.ml_logger.close()
-        if self.r.info is not None:  # clean exit only; on error the launcher tears ranks down
-            import torch.distributed as tdist
-
-            if tdist.is_initialized():
-                tdist.destroy_process_group()
+        if multi:  # clean exit (completed or preempted): stop watchdogs, barrier, destroy
+            ldist.shutdown()
 
     async def _run(self) -> None:
         cfg = self.cfg

@@ -96,6 +96,88 @@ def test_rank1_train_step_error_aborts_both(tiny_model_dir, tmp_path, fsdp):
     _assert_aborted(codes, ended, logs, ft, failing=1, msg="boom in train_step")
 
 
+def test_rank1_setup_error_aborts_both(tiny_model_dir, tmp_path):
+    codes, ended, logs, ft = _launch(tiny_model_dir, tmp_path, "comm_error")
+    _assert_aborted(codes, ended, logs, ft, failing=1, msg="boom in setup")
+
+
+class _ScriptedStore:
+    """Fake store: each check() takes the next outcome ("err" raises, else returned); when the
+    script runs out the watchdog is stopped."""
+
+    def __init__(self, script, stop):
+        self.script, self.stop, self.checks = list(script), stop, 0
+
+    def check(self, keys):
+        self.checks += 1
+        out = self.script.pop(0)
+        if not self.script:
+            self.stop.set()
+        if out == "err":
+            raise ConnectionError("transient")
+        return out
+
+    def get(self, key):
+        return b"1"
+
+
+@pytest.mark.parametrize("script, expect", [
+    (["err", False, "err", "err", False], None),  # never 3 consecutive failures
+    (["err", "err", "err", False], "lost rank 0's c10d store (3 failed checks"),
+    ([True, False], "aborting: rank 1 failed"),  # the key aborts at once
+    (["err", "err", True, False], "aborting: rank 1 failed"),
+])
+def test_watchdog_store_failure_threshold(script, expect):
+    import threading
+
+    from lean_rl import dist as ldist
+
+    stop = threading.Event()
+    store = _ScriptedStore(script, stop)
+    exits = []
+    ldist._watch(store, stop, 0.0, exit_fn=exits.append)
+    if expect is None:
+        assert exits == [] and store.checks == len(script)
+    else:
+        assert len(exits) == 1 and expect in exits[0], exits
+        assert store.checks == len(script) - 1  # exited at that check, not later
+
+
+def test_hard_exit_does_not_wait_for_a_blocked_log_handler(monkeypatch):
+    import logging
+    import threading
+
+    from lean_rl import dist as ldist
+
+    class _Exit(Exception):
+        pass
+
+    def fake_exit(code):
+        raise _Exit(code)
+
+    blocked = threading.Event()
+
+    class Stuck(logging.Handler):
+        def emit(self, record):
+            pass
+
+        def flush(self):
+            blocked.wait()  # a stalled NFS file / full pipe
+
+    h = Stuck()
+    logging.getLogger().addHandler(h)
+    monkeypatch.setattr(ldist.os, "_exit", fake_exit)
+    monkeypatch.setattr(ldist, "_FLUSH_TIMEOUT_S", 0.3)
+    t0 = time.time()
+    try:
+        with pytest.raises(_Exit):
+            ldist._hard_exit("aborting: test")
+        assert time.time() - t0 < 2.0
+    finally:
+        logging.getLogger().removeHandler(h)
+        blocked.set()
+
+
 @pytest.mark.parametrize("failing", [0, 1])
 def test_watchdog_ends_rank_blocked_outside_collectives(tiny_model_dir, tmp_path, failing):
     """The survivor's main thread never enters a collective (gloo would itself notice the dead

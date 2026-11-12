@@ -411,10 +411,10 @@ class _Loop:
             # Fail fast: an unhandled error on any rank hard-exits every rank within seconds
             # instead of leaving the others blocked in a collective until the dist timeout.
             ldist.start_watchdog()
-        self.comm = _Comm(self.r, self.device)
         old_handlers = {s: signal.getsignal(s) for s in PreemptionFlag.SIGNALS}
-        self.flag.install()
         try:
+            self.comm = _Comm(self.r, self.device)
+            self.flag.install()
             self._resume = self._find_resume()
             self._setup_logging()
             # The Trainer is built before anything else so its parity warnings head the log.

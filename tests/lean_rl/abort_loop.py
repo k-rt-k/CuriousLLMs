@@ -3,7 +3,7 @@ subprocess (``python -m tests.lean_rl.abort_loop``) so exit codes and hangs are 
 
 Scenarios: ``ok`` (2 steps), ``preempt`` (rank 1 SIGUSR1 mid-train_step), ``rollout_error``
 (rank 0's vLLM request raises during the first rollouts while rank 1 waits in a collective),
-``train_error`` (rank 1 raises inside train_step: before the grad all-reduce in replicated
+``comm_error`` (rank 1 fails building ``_Comm`` in run's setup), ``train_error`` (rank 1 raises inside train_step: before the grad all-reduce in replicated
 mode, in its first micro-batch under FSDP), ``watchdog_rank{0,1}_fails`` (no loop: the given
 rank aborts while the other blocks its main thread in a 600 s sleep, standing in for a hung
 NCCL collective that never notices the dead peer, so only the watchdog can end it).
@@ -77,6 +77,8 @@ def main() -> int:
 
         def on_completion(n):
             _fail(a.log, "boom in rollout")
+    elif a.scenario == "comm_error" and a.rank == 1:  # fails in run() before any collective
+        loop_mod._Comm = lambda *x, **k: _fail(a.log, "boom in setup")
     elif a.scenario == "train_error" and a.rank == 1:
         if a.fsdp:
             Trainer._fwd_bwd_group = lambda self, *x, **k: _fail(a.log, "boom in train_step")

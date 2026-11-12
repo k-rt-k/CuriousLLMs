@@ -31,6 +31,8 @@ Multi-rank contract -- EVERY rank must call these, in the same order, with the s
 and ``state_dict_for_ckpt`` (FSDP gathers; every rank gets the full dict, save it on rank 0),
 ``load_adapter`` / ``load_ckpt_state`` (every rank reads the same file / dict; no
 communication, but skipping a rank desyncs replicas or leaves its shards stale).
+``train_step(..., should_stop=)`` adds one flag agreement per micro-batch slot: pass
+``should_stop`` on every rank or on none; it returns None on every rank if any rank stopped.
 In replicated mode save_adapter / snapshot / state_dict_for_ckpt happen to be local, but call
 them on all ranks anyway so the code is mode-independent. ``as_ref_client`` computes on the
 calling rank alone: fine in replicated mode; under FSDP every rank must make the same calls.
@@ -41,7 +43,7 @@ from __future__ import annotations
 import copy
 import logging
 from contextlib import contextmanager
-from typing import Any, Iterator, Literal, Sequence
+from typing import Any, Callable, Iterator, Literal, Sequence
 
 import tinker
 import torch
@@ -78,6 +80,20 @@ def _td(datum: tinker.Datum, key: str, dtype: torch.dtype) -> torch.Tensor:
 
 def _full(t: torch.Tensor) -> torch.Tensor:
     return t.full_tensor() if isinstance(t, DTensor) else t
+
+
+def _is_mxfp4(hf_config: Any) -> bool:
+    """True for a pre-quantized MXFP4 checkpoint (``quantization_config.quant_method``)."""
+    q = getattr(hf_config, "quantization_config", None)
+    method = q.get("quant_method") if isinstance(q, dict) else getattr(q, "quant_method", None)
+    return getattr(method, "value", method) == "mxfp4"
+
+
+def _gpt_oss_quant_kw() -> dict[str, Any]:
+    """``from_pretrained`` kwargs that load gpt-oss MXFP4 experts as plain (dequantized) weights."""
+    from transformers import Mxfp4Config
+
+    return {"quantization_config": Mxfp4Config(dequantize=True)}
 
 
 def _pack(lengths: Sequence[int], budget: int) -> list[list[int]]:
@@ -182,28 +198,38 @@ class Trainer:
         self.micro_batch_tokens = micro_batch_tokens
         self.logprob_chunk_tokens = logprob_chunk_tokens
 
+        hf_config = AutoConfig.from_pretrained(base_model)
+        is_gpt_oss = getattr(hf_config, "model_type", "") == "gpt_oss"
         if attn_implementation is None:
             # HF gpt-oss needs eager attention for its attention sinks.
-            model_type = getattr(AutoConfig.from_pretrained(base_model), "model_type", "")
-            attn_implementation = "eager" if model_type == "gpt_oss" else "sdpa"
+            attn_implementation = "eager" if is_gpt_oss else "sdpa"
         # Weight staging (bounded host RAM):
         # - FSDP: only rank 0 materialises the checkpoint (on CPU); other ranks build on the
         #   meta device. After fully_shard, rank 0's full state (base weights AND its LoRA
         #   init) is broadcast and each rank keeps its shard (_load_fsdp_from_rank0).
         # - Replicated / single on CUDA: load straight onto the GPU (no CPU copy).
         full_sd: dict[str, torch.Tensor] | None = None
-        load_kw = dict(torch_dtype=dtype, attn_implementation=attn_implementation)
+        load_kw: dict[str, Any] = dict(torch_dtype=dtype, attn_implementation=attn_implementation)
+        # from_pretrained only: the gpt-oss checkpoints are MXFP4. Without an explicit dequantize,
+        # transformers keeps MXFP4 when triton>=3.4 + kernels are installed (experts become
+        # *_blocks / *_scales), which breaks the PEFT target_parameters on the experts and the
+        # plain (from_config) parameter layout FSDP ranks > 0 build on meta. Only for
+        # pre-quantized checkpoints: on a plain one the config would quantize on the fly.
+        dequant = is_gpt_oss and _is_mxfp4(hf_config)
+        pretrained_kw = dict(load_kw, **_gpt_oss_quant_kw() if dequant else {})
         if fsdp and not dist.is_main:
             with torch.device("meta"):
-                base = AutoModelForCausalLM.from_config(
-                    AutoConfig.from_pretrained(base_model), **load_kw
-                )
+                base = AutoModelForCausalLM.from_config(hf_config, **load_kw)
         elif fsdp:
-            base = AutoModelForCausalLM.from_pretrained(base_model, low_cpu_mem_usage=True, **load_kw)
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model, low_cpu_mem_usage=True, **pretrained_kw
+            )
         elif torch.device(device).type == "cuda":
-            base = AutoModelForCausalLM.from_pretrained(base_model, device_map={"": device}, **load_kw)
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model, device_map={"": device}, **pretrained_kw
+            )
         else:
-            base = AutoModelForCausalLM.from_pretrained(base_model, **load_kw).to(device)
+            base = AutoModelForCausalLM.from_pretrained(base_model, **pretrained_kw).to(device)
         for p in base.parameters():
             p.requires_grad = False
         if getattr(base.config, "final_logit_softcapping", None):
@@ -293,9 +319,10 @@ class Trainer:
         for m in self._fsdp_modules:
             m.reshard()
 
-    def _sync_max(self, n: int) -> int:
-        """Max of ``n`` over ranks (FSDP only; every rank must run as many forwards)."""
-        if not self.fsdp:
+    def _sync_max(self, n: int, *, force: bool = False) -> int:
+        """Max of ``n`` over ranks: under FSDP (every rank must run as many forwards), or in
+        replicated mode with ``force`` (every rank must make as many preemption checks)."""
+        if not self.fsdp and not (force and self.dist is not None):
             return n
         t = torch.tensor([n], dtype=torch.int64, device=self.device)
         tdist.all_reduce(t, op=tdist.ReduceOp.MAX)
@@ -455,12 +482,19 @@ class Trainer:
         return RefLogprobClient(self, which)
 
     # ------------------------------------------------------------------ training
-    def _forward_backward(self, data: list[tinker.Datum], loss_fn: str) -> dict[str, float]:
+    def _forward_backward(
+        self, data: list[tinker.Datum], loss_fn: str, should_stop: Callable[[], bool] | None = None
+    ) -> dict[str, float] | None:
         """Accumulate the token-sum loss grads of ``data`` into ``.grad`` (no zeroing, no step).
 
         Multi-rank: all ranks pass the same full ``data``; each runs its shard and the grads
         end up SUMMED over ranks (all-reduce in replicated mode, FSDP reduce-scatter
         otherwise). Metrics are global sums on every rank.
+
+        ``should_stop`` (preemption): polled after every micro-batch slot; the ranks agree on it
+        (``lean_rl.dist.any_true``) the same number of times -- the micro-batch count is
+        max-synced in both modes. If any rank says stop, every rank drops ALL ``.grad`` and
+        returns None.
         """
         pairs_all = [self._pair(d) for d in data]
         idx = ldist.shard_indices([len(x) for x, _ in pairs_all], self.dist)
@@ -477,20 +511,29 @@ class Trainer:
 
         loss_sum = n_resp = gap_sum = 0.0
         groups = _pack([len(x) for x, _ in pairs], self.micro_batch_tokens) if pairs else []
-        n_calls = self._sync_max(len(groups))
+        n_calls = self._sync_max(len(groups), force=should_stop is not None)
+        stopped = False
         self.model.train()  # activates HF gradient checkpointing; dropout is 0
         try:
             for k in range(n_calls):
-                if k >= len(groups):
+                if k < len(groups):
+                    stats = self._fwd_bwd_group(local, pairs, groups[k], loss_fn)
+                    loss_sum += stats[0]
+                    n_resp += stats[1]
+                    gap_sum += stats[2]
+                elif self.fsdp:
                     # Join FSDP's per-layer all-gathers / reduce-scatters with a zero loss.
                     (self._forward_logp([_DUMMY_PAIR]).sum() * 0.0).backward()
-                    continue
-                stats = self._fwd_bwd_group(local, pairs, groups[k], loss_fn)
-                loss_sum += stats[0]
-                n_resp += stats[1]
-                gap_sum += stats[2]
+                if should_stop is not None and ldist.any_true(should_stop()):
+                    stopped = True
+                    break
         finally:
             self.model.eval()
+        if stopped:
+            for p in self._trainable():
+                p.grad = None
+            self._reshard()
+            return None
 
         if replicated:
             self._all_reduce_lora_grads()
@@ -557,12 +600,23 @@ class Trainer:
         return norm
 
     def train_step(
-        self, data: list[tinker.Datum], loss_fn: str, adam: tinker.AdamParams
-    ) -> dict[str, float]:
+        self,
+        data: list[tinker.Datum],
+        loss_fn: str,
+        adam: tinker.AdamParams,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> dict[str, float] | None:
+        """One optimizer step on ``data``. With ``should_stop`` (e.g. the preemption flag) the
+        ranks agree on it after every micro-batch; if any rank says stop, the step is abandoned
+        on every rank -- grads dropped, no optimizer step, weights / optimizer / ``step``
+        untouched -- and None is returned (on every rank)."""
         if loss_fn not in ("ppo", "importance_sampling"):
             raise ValueError(f"Unsupported loss_fn: {loss_fn!r}")
         self._ensure_optimizer().zero_grad(set_to_none=True)
-        metrics = self._forward_backward(data, loss_fn)
+        metrics = self._forward_backward(data, loss_fn, should_stop)
+        if metrics is None:
+            return None
         metrics["grad_norm"] = self._optim_step(adam)
         return metrics
 

@@ -1,5 +1,6 @@
 import asyncio
 import math
+import os
 
 import pytest
 import torch
@@ -338,3 +339,80 @@ def test_attn_implementation_default(tiny_model_dir, tmp_path):
         num_experts_per_tok=1, layer_types=["full_attention"])).save_pretrained(d)
     assert _trainer(d).model.config._attn_implementation == "eager"
     assert _trainer(tiny_model_dir, attn_implementation="eager").model.config._attn_implementation == "eager"
+
+
+def test_gpt_oss_loads_mxfp4_dequantized(tmp_path, monkeypatch):
+    """A pre-quantized (MXFP4) gpt-oss checkpoint gets an explicit Mxfp4Config(dequantize=True)
+    from_pretrained kwarg; a plain gpt-oss checkpoint (real load) does not."""
+    import json
+
+    from transformers import GptOssConfig, GptOssForCausalLM, Mxfp4Config
+
+    import lean_rl.trainer as trainer_mod
+
+    d = str(tmp_path / "gpt_oss")
+    GptOssForCausalLM(GptOssConfig(
+        hidden_size=32, intermediate_size=32, num_hidden_layers=1, num_attention_heads=4,
+        num_key_value_heads=2, head_dim=8, vocab_size=64, num_local_experts=2,
+        num_experts_per_tok=1, layer_types=["full_attention"])).save_pretrained(d)
+    calls = []
+    real = trainer_mod.AutoModelForCausalLM.from_pretrained
+
+    def spy(*a, **k):
+        calls.append(k)
+        return real(*a, **k)
+
+    monkeypatch.setattr(trainer_mod.AutoModelForCausalLM, "from_pretrained", spy)
+    tr = _trainer(d)
+    assert "quantization_config" not in calls[-1]
+    assert any("experts" in n for n, _ in tr._named_lora())
+
+    # Mark the checkpoint MXFP4 like openai/gpt-oss-*; stop at from_pretrained (the tiny
+    # checkpoint has no *_blocks tensors to dequantize).
+    cfg_path = os.path.join(d, "config.json")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    cfg["quantization_config"] = {"quant_method": "mxfp4", "modules_to_not_convert": ["lm_head"]}
+    with open(cfg_path, "w") as f:
+        json.dump(cfg, f)
+
+    class _Stop(Exception):
+        pass
+
+    def capture(*a, **k):
+        calls.append(k)
+        raise _Stop
+
+    monkeypatch.setattr(trainer_mod.AutoModelForCausalLM, "from_pretrained", capture)
+    with pytest.raises(_Stop):
+        _trainer(d)
+    q = calls[-1].get("quantization_config")
+    assert isinstance(q, Mxfp4Config) and q.dequantize
+
+
+def test_train_step_should_stop_abandons_step(tiny_model_dir):
+    """should_stop -> None after the first micro-batch: no update, no grads, step unchanged."""
+    adam = tinker.AdamParams(**ADAM)
+    data = _make_data(lengths=(5, 9, 12, 7))
+    tr = _trainer(tiny_model_dir, micro_batch_tokens=16)  # several micro-batches
+    _perturb_lora_b(tr.model)
+    tr.train_step(data, "ppo", adam)
+    before = _lora(tr.model)
+    opt_before = {k: v.clone() for k, v in tr.optimizer.state[tr._trainable()[0]].items()}
+    polls = []
+
+    def stop():
+        polls.append(1)
+        return len(polls) >= 2
+
+    assert tr.train_step(data, "ppo", adam, should_stop=stop) is None
+    assert len(polls) == 2  # stopped between micro-batches, not at the end
+    assert tr.step == 1
+    assert all(p.grad is None for p in tr._trainable())
+    for n, p in _lora(tr.model).items():
+        assert torch.equal(p, before[n]), n
+    for k, v in tr.optimizer.state[tr._trainable()[0]].items():
+        assert torch.equal(v, opt_before[k]), k
+    # A step that is never told to stop matches a plain train_step.
+    m = tr.train_step(data, "ppo", adam, should_stop=lambda: False)
+    assert m is not None and tr.step == 2

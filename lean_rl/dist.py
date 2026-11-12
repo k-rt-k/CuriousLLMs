@@ -122,6 +122,16 @@ def barrier() -> None:
         tdist.barrier(group=_OBJ_GROUP)
 
 
+def any_true(local: bool) -> bool:
+    """True on every rank if ``local`` is True on any rank (one-int all-reduce MAX on the gloo
+    group). A collective: every rank must make the same sequence of calls."""
+    if not _multi():
+        return bool(local)
+    t = torch.tensor([1 if local else 0], dtype=torch.int32)
+    tdist.all_reduce(t, op=tdist.ReduceOp.MAX, group=_OBJ_GROUP)
+    return bool(t.item())
+
+
 def shard_indices(lengths: Sequence[int], dist: DistInfo | None) -> list[int]:
     """Indices (ascending) of the items this rank works on; all items when single-rank."""
     if dist is None or dist.world_size <= 1:

@@ -8,26 +8,37 @@ import math
 import os
 import random
 import signal
+import threading
 
 import httpx
 import pytest
+import torch
 
 from local_backend import weight_sync
+from lean_rl import loop as loop_mod
 from lean_rl.config import LeanRLConfig
 from lean_rl.loop import run
 
 
 class FakeVLLM:
-    """Random completions (token ids + logprobs) and 200 for LoRA load/unload."""
+    """Random completions (token ids + logprobs) and 200 for LoRA load/unload. Once ``dead``
+    (vLLM SIGTERMed by the preemption) every request raises ``httpx.ConnectError``."""
 
-    def __init__(self, on_completion=None):
+    def __init__(self, on_completion=None, on_lora_load=None):
         self.lora_loads: list[dict] = []
         self.completions = 0
         self.models: list[str] = []
+        self.dead = False
         self._on_completion = on_completion
+        self._on_lora_load = on_lora_load
         self._rng = random.Random(0)
 
+    def _check_alive(self) -> None:
+        if self.dead:
+            raise httpx.ConnectError("fake vLLM is gone")
+
     def completion(self, request: httpx.Request) -> httpx.Response:
+        self._check_alive()
         body = json.loads(request.content)
         self.completions += 1
         self.models.append(body["model"])
@@ -46,6 +57,9 @@ class FakeVLLM:
     def lora(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/load_lora_adapter":
             self.lora_loads.append(json.loads(request.content))
+            if self._on_lora_load is not None:
+                self._on_lora_load(len(self.lora_loads))
+        self._check_alive()
         return httpx.Response(200, json={})
 
     def install(self, monkeypatch) -> httpx.MockTransport:
@@ -144,6 +158,90 @@ def test_preemption_mid_rollout_saves_last_completed_step(tiny_model_dir, tmp_pa
     asyncio.run(run(cfg, transport=transport))
     assert [r["step"] for r in _metrics(log)] == [0, 1, 2]
     assert "step_000003" in _ckpts(log)
+
+
+class _PreemptedEval:
+    """Evaluator whose second call is preempted: SIGUSR1 and vLLM dies; the call then either
+    hits the dead fake vLLM (raises) or hangs (the loop must abandon it by polling)."""
+
+    def __init__(self, fake: FakeVLLM, mode: str):
+        self.fake, self.mode, self.calls = fake, mode, 0
+
+    async def __call__(self, sampling_client) -> dict:
+        import tinker
+
+        self.calls += 1
+        if self.calls == 2:
+            self.fake.dead = True
+            os.kill(os.getpid(), signal.SIGUSR1)
+            if self.mode == "hang":
+                await asyncio.sleep(3600)
+        await sampling_client.sample_async(
+            prompt=tinker.ModelInput.from_ints([2, 3]), num_samples=1,
+            sampling_params=tinker.SamplingParams(max_tokens=2),
+        )
+        return {"acc": 1.0}
+
+
+@pytest.mark.parametrize("mode", ["raise", "hang"])
+def test_preemption_during_eval_saves_last_completed_step(tiny_model_dir, tmp_path, monkeypatch, mode):
+    fake = FakeVLLM()
+    transport = fake.install(monkeypatch)
+    ev = _PreemptedEval(fake, mode)
+    monkeypatch.setattr(loop_mod, "_make_evaluators", lambda *a: [ev])
+    log = str(tmp_path / "run")
+    cfg = _cfg(tiny_model_dir, log, num_batches=3, save_every=100, eval_every=1)
+    asyncio.run(run(cfg, transport=transport))  # returns normally (exit 0)
+
+    rows = _metrics(log)
+    assert [r["step"] for r in rows] == [0] and rows[0]["test/acc"] == 1.0
+    assert ev.calls == 2
+    assert _ckpts(log) == ["step_000001"]
+
+
+def test_vllm_sync_failure_during_preemption_saves_completed_step(tiny_model_dir, tmp_path, monkeypatch):
+    """vLLM dies during the adapter sync after step 1 and our SIGTERM lands only afterwards:
+    the failure is treated as preemption and the completed step is saved."""
+
+    def on_load(n):
+        if n == 2:
+            fake.dead = True
+            threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGUSR1)).start()
+
+    fake = FakeVLLM(on_lora_load=on_load)
+    transport = fake.install(monkeypatch)
+    log = str(tmp_path / "run")
+    asyncio.run(run(_cfg(tiny_model_dir, log, num_batches=3, save_every=100), transport=transport))
+    assert [r["step"] for r in _metrics(log)] == [0, 1]
+    assert _ckpts(log) == ["step_000002"]
+
+
+def test_vllm_sync_failure_without_preemption_raises(tiny_model_dir, tmp_path, monkeypatch):
+    fake = FakeVLLM(on_lora_load=lambda n: setattr(fake, "dead", n == 2))
+    transport = fake.install(monkeypatch)
+    monkeypatch.setattr(loop_mod, "_PREEMPT_GRACE_S", 0.2)
+    log = str(tmp_path / "run")
+    with pytest.raises(RuntimeError, match="LoRA sync failed"):
+        asyncio.run(run(_cfg(tiny_model_dir, log, num_batches=3, save_every=100), transport=transport))
+
+
+def test_resume_skips_unloadable_checkpoint_and_stale_tmp(tiny_model_dir, tmp_path, monkeypatch):
+    fake = FakeVLLM()
+    transport = fake.install(monkeypatch)
+    log = str(tmp_path / "run")
+    asyncio.run(run(_cfg(tiny_model_dir, log, num_batches=2, keep_checkpoints=2), transport=transport))
+    assert _ckpts(log) == ["step_000001", "step_000002"]
+    with open(os.path.join(log, "ckpt", "step_000002", "optimizer.pt"), "wb") as f:
+        f.write(b"truncated")  # newest checkpoint no longer loads
+    stale = os.path.join(log, "ckpt", "step_000003.tmp")
+    os.makedirs(stale)
+    open(os.path.join(stale, "optimizer.pt"), "w").close()
+
+    asyncio.run(run(_cfg(tiny_model_dir, log, num_batches=3, keep_checkpoints=2), transport=transport))
+    assert [r["step"] for r in _metrics(log)] == [0, 1, 1, 2]  # resumed after step 1
+    assert not os.path.exists(stale)
+    assert _ckpts(log) == ["step_000002", "step_000003"]
+    torch.load(os.path.join(log, "ckpt", "step_000002", "optimizer.pt"), weights_only=False)
 
 
 LAUNCHER_ARGS = [

@@ -7,11 +7,18 @@ SPMD layout (``WORLD_SIZE > 1``): every rank builds a ``Trainer`` and makes ever
 shapes rewards (Gemini judge, SemanticRND on rank 0's GPU), syncs the adapter, evaluates, logs
 and writes checkpoints; it broadcasts the assembled ``list[tinker.Datum]`` to the other ranks.
 
-Preemption (Babel gives <= 120 s from SIGTERM to SIGKILL): a ``PreemptionFlag`` is installed on
-every rank. At each safe point (after the rollouts, before the KL/train phase, right after
-``train_step``) the ranks agree on the flag (all-reduce MAX). An in-progress step is abandoned
-(its rollouts discarded, RND state rolled back to the start of the step), the last completed
-step is checkpointed if it is not already, and ``run`` returns normally (exit 0).
+Preemption (Babel gives <= 120 s from SIGTERM to SIGKILL, and SIGTERMs vLLM too): a
+``PreemptionFlag`` is installed on every rank. Rank 0 polls it during evals and rollouts; the
+ranks agree on it (``lean_rl.dist.any_true``: all-reduce MAX) after the rollouts, after the
+KL reference logprobs, after every ``train_step`` micro-batch (``Trainer.train_step(...,
+should_stop=)``), at the end of the step and after the vLLM adapter sync. A vLLM call that
+fails while the flag is (or within ``_PREEMPT_GRACE_S`` becomes) set counts as preemption, not
+an error. An in-progress step is abandoned (rollouts discarded, grads dropped without an
+optimizer step, RND state rolled back to the start of the step), the last completed step is
+checkpointed if it is not already, and ``run`` returns normally (exit 0) on every rank.
+
+Resume: rank 0 clears stale ``step_*.tmp`` dirs and picks the newest checkpoint that loads
+(``load_latest``); the choice is broadcast so every rank restores the same path.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ from lean_rl.checkpoint import (
     LoopState,
     PreemptionFlag,
     load_latest,
+    remove_stale_tmp,
     restore_checkpoint,
     save_checkpoint,
 )
@@ -55,7 +63,10 @@ logger = logging.getLogger(__name__)
 
 # Tinker optimizer parity (curiosity_train.optim_step): Adam b1 0.9, b2 0.95, eps 1e-8, no WD.
 ADAM_BETA1, ADAM_BETA2, ADAM_EPS = 0.9, 0.95, 1e-8
-_POLL_S = 0.5  # how often rollouts check the preemption flag
+_POLL_S = 0.5  # how often rollouts / evals check the preemption flag
+# After a vLLM call fails, how long to wait for our own SIGTERM: Slurm signals vLLM and the
+# trainer at about the same time, so vLLM can die a moment before our flag is set.
+_PREEMPT_GRACE_S = 10.0
 
 
 class PrecomputedLogprobs:
@@ -101,14 +112,10 @@ class _Comm:
         return obj if self._ldist is None else self._ldist.broadcast_object(obj, src=0)
 
     def agree(self, local: bool) -> bool:
-        """True on every rank if any rank says True (all-reduce MAX)."""
+        """True on every rank if any rank says True (all-reduce MAX on the gloo group)."""
         if self._ldist is None:
             return bool(local)
-        import torch.distributed as tdist
-
-        t = torch.tensor([1 if local else 0], dtype=torch.int32, device=self.device)
-        tdist.all_reduce(t, op=tdist.ReduceOp.MAX)
-        return bool(t.item())
+        return self._ldist.any_true(local)
 
 
 def _init_rank() -> tuple[_Rank, str]:
@@ -195,23 +202,47 @@ def _make_judge(cfg: LeanRLConfig):
 
 
 # ---------------------------------------------------------------------------- sampling
+def _preempted_after_error(flag: PreemptionFlag, exc: BaseException) -> bool:
+    """A vLLM call raised ``exc``: True if preemption is (or within the grace period becomes)
+    requested, i.e. vLLM was most likely killed by the same Slurm preemption."""
+    deadline = time.monotonic() + _PREEMPT_GRACE_S
+    while not flag.requested and time.monotonic() < deadline:
+        time.sleep(0.05)  # the signal handler runs in this (main) thread meanwhile
+    if flag.requested:
+        logger.warning(f"vLLM call failed during preemption ({exc!r}); treating it as preemption")
+    return flag.requested
+
+
+async def _gather_unless_preempted(coros: Sequence[Any], flag: PreemptionFlag) -> list | None:
+    """Run ``coros`` concurrently, polling the flag. None (all tasks cancelled) if preemption
+    is requested meanwhile or a task fails because of it; any other failure is re-raised."""
+    tasks = [asyncio.create_task(c) for c in coros]
+    pending = set(tasks)
+    try:
+        while pending:
+            if flag.requested:
+                return None
+            done, pending = await asyncio.wait(pending, timeout=_POLL_S)
+            for t in done:
+                exc = None if t.cancelled() else t.exception()
+                if exc is not None:
+                    if _preempted_after_error(flag, exc):
+                        return None
+                    raise exc
+        return None if flag.requested else [t.result() for t in tasks]
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _rollouts(
     sampling_client, builders: Sequence[EnvGroupBuilder], max_tokens: int, flag: PreemptionFlag
 ) -> list[TrajectoryGroup] | None:
-    """All group rollouts concurrently; None (tasks cancelled) if preemption is requested."""
+    """All group rollouts concurrently; None (tasks cancelled) if preempted."""
     policy = TinkerTokenCompleter(sampling_client, max_tokens=max_tokens)
-    tasks = [asyncio.create_task(do_group_rollout(b, policy)) for b in builders]
-    pending = set(tasks)
-    while pending:
-        if flag.requested:
-            for t in pending:
-                t.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            return None
-        _, pending = await asyncio.wait(pending, timeout=_POLL_S)
-    if flag.requested:
-        return None
-    return [t.result() for t in tasks]
+    return await _gather_unless_preempted([do_group_rollout(b, policy) for b in builders], flag)
 
 
 def _make_evaluators(test_datasets, max_tokens: int) -> list[RLTestSetEvaluator]:
@@ -226,8 +257,11 @@ def _make_evaluators(test_datasets, max_tokens: int) -> list[RLTestSetEvaluator]
     return [RLTestSetEvaluator(test_datasets, max_tokens=max_tokens)]
 
 
-async def _run_evals(evaluators, sampling_client) -> dict[str, Any]:
-    results = await asyncio.gather(*[ev(sampling_client) for ev in evaluators])
+async def _run_evals(evaluators, sampling_client, flag: PreemptionFlag) -> dict[str, Any] | None:
+    """All evaluators concurrently; None (abandoned) if preempted."""
+    results = await _gather_unless_preempted([ev(sampling_client) for ev in evaluators], flag)
+    if results is None:
+        return None
     out: dict[str, Any] = {}
     for r in results:
         out.update({f"test/{k}": v for k, v in r.items()})
@@ -244,12 +278,27 @@ class _Loop:
         self.last_saved_step = -1
 
     # ------------------------------------------------------------------ setup
+    def _find_resume(self) -> tuple[str, LoopState] | None:
+        """Rank 0 clears stale ``.tmp`` checkpoint dirs and picks the checkpoint to resume from
+        (newest that loads); every rank gets rank 0's choice (or its error)."""
+        found: Any = None
+        if self.r.is_main:
+            try:
+                remove_stale_tmp(self.cfg.log_path)
+                found = load_latest(self.cfg.log_path)
+            except Exception as e:  # noqa: BLE001 -- re-raised on every rank below
+                found = e
+        found = self.comm.broadcast(found)
+        if isinstance(found, Exception):
+            raise found
+        return found
+
     def _setup_logging(self) -> None:
         cfg = self.cfg
         if not self.r.is_main:
             logging.basicConfig(level=logging.INFO, format=f"[rank {self.r.rank}] %(name)s %(levelname)s %(message)s")
             return
-        found = load_latest(cfg.log_path)
+        found = self._resume
         run_id = found[1].wandb_run_id if found else None
         if run_id and cfg.wandb_project:
             os.environ["WANDB_RUN_ID"] = run_id
@@ -323,22 +372,32 @@ class _Loop:
         if self.r.is_main:
             logger.info(f"Saved checkpoint for step {step} at {path}")
 
-    def _sync_adapter(self, step: int) -> None:
+    def _sync_adapter(self, step: int) -> bool:
         """All ranks: write the current adapter (rank 0 writes; FSDP gathers on every rank);
-        rank 0 then hot-swaps it into every vLLM server."""
+        rank 0 then hot-swaps it into every vLLM server. Returns False on every rank if the
+        sync failed because of preemption (vLLM is SIGTERMed with us)."""
         from local_backend.weight_sync import sync_lora_to_vllm
 
         root = os.path.join(self.cfg.log_path, "serving_adapter")
         path = os.path.join(root, f"step_{step:06d}")
         name = f"lean_step_{step:06d}"
         self.trainer.save_adapter(path)  # collective under FSDP
-        if not self.r.is_main:
-            return
-        sync_lora_to_vllm(path, name, self.cfg.vllm_urls, prev_name=self.sampling_client.adapter_name)
-        self.sampling_client.adapter_name = name
-        for d in os.listdir(root):  # vLLM has loaded the new one; older dirs are unused
-            if d != os.path.basename(path):
-                shutil.rmtree(os.path.join(root, d), ignore_errors=True)
+        preempted = False
+        if self.r.is_main:
+            try:
+                sync_lora_to_vllm(
+                    path, name, self.cfg.vllm_urls, prev_name=self.sampling_client.adapter_name
+                )
+            except Exception as e:  # noqa: BLE001
+                if not _preempted_after_error(self.flag, e):
+                    raise
+                preempted = True
+            else:
+                self.sampling_client.adapter_name = name
+                for d in os.listdir(root):  # vLLM has loaded the new one; older dirs are unused
+                    if d != os.path.basename(path):
+                        shutil.rmtree(os.path.join(root, d), ignore_errors=True)
+        return not self.comm.agree(preempted)
 
     # ------------------------------------------------------------------ main
     async def run(self) -> None:
@@ -349,6 +408,7 @@ class _Loop:
         old_handlers = {s: signal.getsignal(s) for s in PreemptionFlag.SIGNALS}
         self.flag.install()
         try:
+            self._resume = self._find_resume()
             self._setup_logging()
             # The Trainer is built before anything else so its parity warnings head the log.
             self.trainer = self._build_trainer()
@@ -392,7 +452,7 @@ class _Loop:
 
         # Resume > init_from_adapter > fresh.
         start = 0
-        found = load_latest(cfg.log_path)
+        found = self._resume  # rank 0's choice, the same path on every rank
         if found is not None:
             path, state = found
             rnd_state = restore_checkpoint(path, self.trainer)
@@ -406,8 +466,11 @@ class _Loop:
             self.trainer.snapshot_init_adapter()  # KL reference for kl_reference=init
             logger.info(f"Warm-started adapter from {cfg.init_from_adapter} (fresh optimizer)")
         # (On resume the init snapshot comes back from the checkpoint.)
-        if found is not None or cfg.init_from_adapter:
-            self._sync_adapter(start)  # all ranks (save_adapter is collective under FSDP)  # vLLM must sample from the restored / warm-start policy
+        # vLLM must sample from the restored / warm-start policy. All ranks (save_adapter is
+        # collective under FSDP).
+        if (found is not None or cfg.init_from_adapter) and not self._sync_adapter(start):
+            logger.info("Preempted during the startup adapter sync; exiting")
+            return  # nothing new to save
         if start >= n_total:
             logger.info(f"Nothing to do: step {start} >= {n_total} batches")
             return
@@ -441,9 +504,14 @@ class _Loop:
         abandoned = False
 
         if is_main:
-            if cfg.eval_every > 0 and i_batch % cfg.eval_every == 0 and evaluators:
+            if (
+                cfg.eval_every > 0 and i_batch % cfg.eval_every == 0 and evaluators
+                and not self.flag.requested
+            ):
                 with timed("run_evals", metrics):
-                    metrics.update(await _run_evals(evaluators, self.sampling_client))
+                    evals = await _run_evals(evaluators, self.sampling_client, self.flag)
+                if evals is not None:
+                    metrics.update(evals)
             builders = dataset.get_batch(i_batch)
             with timed("sample", metrics):
                 groups = None if self.flag.requested else await _rollouts(
@@ -477,17 +545,18 @@ class _Loop:
                     data, _ = assemble_training_data(groups, compute_advantages(groups))
 
         # Safe point 1: abandon the step before any trainer work.
+        if is_main and rnd_before is None:
+            rnd_before = _rnd_state(novelty_model, rnd_buffer)
         if self.comm.agree(abandoned or self.flag.requested):
-            logger.info(f"Preemption requested during step {i_batch}: abandoning it")
-            if is_main and rnd_before is None:
-                rnd_before = _rnd_state(novelty_model, rnd_buffer)
-            self._save(i_batch, rnd_before)
-            return False
+            return self._abandon(i_batch, rnd_before)
 
         data = self.comm.broadcast(data)
         if cfg.kl_penalty_coef > 0:
             with timed("kl_vs_ref", metrics):
                 ref_lp = self.trainer.logprobs(data, cfg.kl_reference)  # all ranks (SPMD)
+                # Safe point 2: the reference logprobs can take minutes on large models.
+                if self.comm.agree(self.flag.requested):
+                    return self._abandon(i_batch, rnd_before)
                 if is_main:
                     metrics.update(
                         await incorporate_kl_penalty(
@@ -497,7 +566,13 @@ class _Loop:
             data = self.comm.broadcast(data)  # KL-adjusted advantages
 
         with timed("train", metrics):
-            metrics.update(self.trainer.train_step(data, cfg.loss_fn, adam))  # all ranks
+            # All ranks; the ranks agree on the flag after every micro-batch (safe point 3).
+            train_metrics = self.trainer.train_step(
+                data, cfg.loss_fn, adam, should_stop=lambda: self.flag.requested
+            )
+        if train_metrics is None:  # abandoned on every rank: no optimizer step was taken
+            return self._abandon(i_batch, rnd_before)
+        metrics.update(train_metrics)
         step = i_batch + 1
 
         if cfg.compute_post_kl:
@@ -506,11 +581,12 @@ class _Loop:
                 if is_main:
                     metrics.update(await compute_post_kl(data, PrecomputedLogprobs(data, post_lp)))
 
-        # Safe point 2: the step is complete; save it and stop if preempted.
+        # Safe point 4: the step is complete; save it and stop if preempted (also if the vLLM
+        # sync fails because vLLM was preempted with us).
         preempt = self.comm.agree(self.flag.requested)
         if not preempt:  # all ranks: save_adapter is collective under FSDP
             with timed("sync_adapter", metrics):
-                self._sync_adapter(step)
+                preempt = not self._sync_adapter(step)
         if is_main:
             metrics["time/total"] = time.time() - t0
             mem = get_memory_usage()
@@ -527,6 +603,13 @@ class _Loop:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return True
+
+    def _abandon(self, i_batch: int, rnd_before: dict | None) -> bool:
+        """All ranks: drop the in-progress step, checkpoint the last completed one (``i_batch``
+        steps done; RND state from before this step's shaping), and report preemption."""
+        logger.info(f"Preemption requested during step {i_batch}: abandoning it")
+        self._save(i_batch, rnd_before)
+        return False
 
 
 async def run(cfg: LeanRLConfig, *, transport=None) -> None:

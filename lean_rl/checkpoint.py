@@ -4,7 +4,8 @@ Layout: ``<log_path>/ckpt/step_{step:06d}/`` containing ``adapter/`` (PEFT dir, 
 warm start), ``optimizer.pt`` (``Trainer.state_dict_for_ckpt()``: exact LoRA weights, AdamW
 state, init snapshot, step), ``rng.pt``, ``loop_state.json`` and optionally ``rnd.pt``.
 A checkpoint is written to ``step_N.tmp`` and renamed into place; older ones are deleted
-only after the rename, and ``.tmp`` dirs are never loaded.
+only after the rename, and ``.tmp`` dirs are never loaded (``remove_stale_tmp`` clears them at
+startup). ``load_latest`` falls back to an older checkpoint if the newest does not load.
 """
 
 from __future__ import annotations
@@ -119,13 +120,53 @@ def save_checkpoint(
     return final
 
 
-def load_latest(log_path: str) -> tuple[str, LoopState] | None:
+def remove_stale_tmp(log_path: str) -> list[str]:
+    """Delete ``ckpt/step_*.tmp`` dirs left by a save interrupted by SIGKILL. Call on the
+    writing rank (rank 0) only, before resuming. Returns the removed paths."""
+    root = _ckpt_root(log_path)
+    if not os.path.isdir(root):
+        return []
+    removed = []
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
+        if name.startswith("step_") and name.endswith(".tmp") and os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+            logger.warning(f"Removed stale partial checkpoint {path}")
+    return removed
+
+
+def _check_loadable(path: str) -> None:
+    """Light restore check: unpickle every file ``restore_checkpoint`` reads (no trainer)."""
+    for name in ("optimizer.pt", "rng.pt", "rnd.pt"):
+        f = os.path.join(path, name)
+        if name == "rnd.pt" and not os.path.exists(f):
+            continue
+        torch.load(f, map_location="cpu", weights_only=False)
+
+
+def load_latest(log_path: str, *, validate: bool = True) -> tuple[str, LoopState] | None:
+    """Newest complete checkpoint that loads: ``(path, LoopState)``, or None if there is none.
+
+    With ``validate`` (default) each candidate's files are unpickled first; an unreadable one
+    is skipped with a warning and the next older one tried. Raises only if checkpoints exist
+    but none loads. Multi-rank: call on rank 0 and broadcast the result, so every rank
+    restores the same path."""
     steps = _list_steps(log_path)
     if not steps:
         return None
-    path = steps[-1][1]
-    with open(os.path.join(path, "loop_state.json")) as f:
-        return path, LoopState(**json.load(f))
+    errors = []
+    for _, path in reversed(steps):
+        try:
+            with open(os.path.join(path, "loop_state.json")) as f:
+                state = LoopState(**json.load(f))
+            if validate:
+                _check_loadable(path)
+            return path, state
+        except Exception as e:  # noqa: BLE001 -- any unreadable file disqualifies the checkpoint
+            logger.warning(f"Checkpoint {path} does not load ({e!r}); trying an older one")
+            errors.append(f"{path}: {e!r}")
+    raise RuntimeError("No loadable checkpoint: " + "; ".join(errors))
 
 
 def restore_checkpoint(path: str, trainer: "Trainer", *, restore_rng: bool = True) -> dict | None:

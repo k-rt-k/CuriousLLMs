@@ -12,7 +12,7 @@ import torch
 tinker = pytest.importorskip("tinker")
 
 from lean_rl.checkpoint import (  # noqa: E402
-    LoopState, PreemptionFlag, load_latest, restore_checkpoint, save_checkpoint,
+    LoopState, PreemptionFlag, load_latest, remove_stale_tmp, restore_checkpoint, save_checkpoint,
 )
 from tests.lean_rl.test_trainer import _make_data, _trainer  # noqa: E402
 
@@ -92,6 +92,37 @@ def test_crash_during_save_keeps_previous(tiny_model_dir, tmp_path, monkeypatch)
     assert "step_000002.tmp" in os.listdir(tmp_path / "ckpt")
     found = load_latest(str(tmp_path))
     assert found is not None and found[1].step == 1
+
+
+def test_load_latest_falls_back_to_older_loadable(tiny_model_dir, tmp_path):
+    tr = _trainer(tiny_model_dir)
+    _steps(tr, 1)
+    save_checkpoint(str(tmp_path), 1, tr, LoopState(1, 1, None), None)
+    _steps(tr, 1)
+    save_checkpoint(str(tmp_path), 2, tr, LoopState(2, 2, None), None)
+    with open(tmp_path / "ckpt" / "step_000002" / "optimizer.pt", "wb") as f:
+        f.write(b"corrupt")
+    found = load_latest(str(tmp_path))
+    assert found is not None and found[1].step == 1
+    b = _trainer(tiny_model_dir)
+    restore_checkpoint(found[0], b)
+    assert b.step == 1
+    with open(tmp_path / "ckpt" / "step_000001" / "rng.pt", "wb") as f:
+        f.write(b"corrupt")
+    with pytest.raises(RuntimeError, match="No loadable checkpoint"):
+        load_latest(str(tmp_path))
+
+
+def test_remove_stale_tmp(tiny_model_dir, tmp_path):
+    assert remove_stale_tmp(str(tmp_path)) == []  # no ckpt dir yet
+    tr = _trainer(tiny_model_dir)
+    save_checkpoint(str(tmp_path), 1, tr, LoopState(1, 1, None), None)
+    for name in ("step_000002.tmp", "step_000003.tmp"):
+        (tmp_path / "ckpt" / name).mkdir()
+        (tmp_path / "ckpt" / name / "optimizer.pt").write_bytes(b"partial")
+    removed = remove_stale_tmp(str(tmp_path))
+    assert sorted(os.path.basename(p) for p in removed) == ["step_000002.tmp", "step_000003.tmp"]
+    assert os.listdir(tmp_path / "ckpt") == ["step_000001"]
 
 
 def test_preemption_flag_sets_on_signal():

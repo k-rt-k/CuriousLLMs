@@ -264,3 +264,17 @@ def test_cli_accepts_launcher_keys_and_rejects_unsupported():
     for bad in ("dataset_schedule=m-m", "num_substeps=2", "remove_constant_reward_groups=True"):
         with pytest.raises((Exception, SystemExit)):
             chz.entrypoint(LeanRLConfig, argv=["log_path=/tmp/x", bad])
+
+
+def test_missing_rnd_embeddings_fail_at_startup(tiny_model_dir, tmp_path, monkeypatch):
+    """RND is built only after the model and vLLM are up (20+ min on Babel); a missing
+    embeddings file must stop the run before any of that."""
+    from lean_rl import loop as loop_mod
+
+    monkeypatch.chdir(tmp_path)  # no embeddings/ here
+    built = []
+    monkeypatch.setattr(loop_mod._Loop, "_build_trainer", lambda self: built.append(1))
+    cfg = _cfg(tiny_model_dir, str(tmp_path / "log"), use_rnd_curiosity=True)
+    with pytest.raises(FileNotFoundError, match="use_rnd_curiosity=False"):
+        asyncio.run(run(cfg, transport=None))
+    assert not built

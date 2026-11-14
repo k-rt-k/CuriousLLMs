@@ -151,9 +151,20 @@ def _validate(cfg: LeanRLConfig) -> None:
         raise ValueError("kl_reference=init requires init_from_adapter to be set.")
     if cfg.save_every <= 0:
         raise ValueError("save_every must be >= 1")
+    # Checked up front: RND is built after the model and vLLM are up (20+ min on Babel).
+    if cfg.use_rnd_curiosity and not os.path.exists(RND_EMBEDDINGS_FILE):
+        raise FileNotFoundError(
+            f"use_rnd_curiosity=True needs the precomputed RND embeddings {RND_EMBEDDINGS_FILE!r} "
+            f"(relative to {os.getcwd()}); copy them there or pass use_rnd_curiosity=False."
+        )
 
 
 # ---------------------------------------------------------------------------- RND (rank 0)
+# Precomputed gte embeddings for the RND normaliser (relative to the repo root, as in
+# curiosity_train.py). Not in git: produced by the RND_experimentation notebooks.
+RND_EMBEDDINGS_FILE = "embeddings/embeddings_gte_10000.pkl"
+
+
 def _make_rnd(cfg: LeanRLConfig, device: str, batch_size: int):
     if not cfg.use_rnd_curiosity:
         logger.info("RND curiosity rewards disabled (use_rnd_curiosity=False)")
@@ -170,7 +181,7 @@ def _make_rnd(cfg: LeanRLConfig, device: str, batch_size: int):
         concat_before_emb=False,
         separator=" [SEP] ",
         normalize_embeddings=True,
-        embedding_load_file="embeddings/embeddings_gte_10000.pkl",
+        embedding_load_file=RND_EMBEDDINGS_FILE,
     )
     model._optimizer = torch.optim.Adam(model.rnd.predictor_parameters(), lr=cfg.rnd_learning_rate)
     assert model.embedding_dim is not None
@@ -447,8 +458,14 @@ class _Loop:
     async def _run(self) -> None:
         cfg = self.cfg
         is_main = self.r.is_main
-        dataset, test_datasets = await self._setup_data()
-        n_total = len(dataset) if cfg.num_batches is None else min(len(dataset), cfg.num_batches)
+        # Only rank 0 samples, so only it builds the datasets (the mixed builder reads ~2 GB of
+        # DeepMath rows from /data, slow on NFS); the other ranks only need the batch count.
+        dataset = test_datasets = None
+        n_total = None
+        if is_main:
+            dataset, test_datasets = await self._setup_data()
+            n_total = len(dataset) if cfg.num_batches is None else min(len(dataset), cfg.num_batches)
+        n_total = self.comm.broadcast(n_total)
 
         novelty_model = rnd_buffer = gemini_judge = None
         tokenizer = None

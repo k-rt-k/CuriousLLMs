@@ -185,6 +185,10 @@ export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 # in a subshell whose exports are lost.
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
+# openai_harmony (gpt-oss tokenizer in vLLM) caches vocab files in /tmp/tiktoken-rs-cache by
+# default; on shared nodes another user may own it (Permission denied -> vLLM dies at startup).
+export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-${TMPDIR:-/tmp}/tiktoken-rs-${USER}}"
+mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 
 # ---- rank: one srun task per trainer rank ----------------------------------
 if [[ "$1" == "--rank" ]]; then

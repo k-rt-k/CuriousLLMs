@@ -30,6 +30,10 @@
 # subshell), so the trainer gets it too; an existing value is kept.
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
+# openai_harmony (gpt-oss tokenizer in vLLM) caches vocab files in /tmp/tiktoken-rs-cache by
+# default; on shared nodes another user may own it (Permission denied -> vLLM dies at startup).
+export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-${TMPDIR:-/tmp}/tiktoken-rs-${USER}}"
+mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 : "${VLLM_EXTRA_ARGS:=}"
 
 if [[ -z "${VLLM_PORT}" ]]; then
@@ -54,6 +58,9 @@ export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 # (deepseek-ai/DeepGEMM) is installed in the `clm` env — see slurm/README.md
 # section "Manual env tweaks". To force the pure-PyTorch / Marlin fallback,
 # set VLLM_USE_DEEP_GEMM=0 and VLLM_MOE_USE_DEEP_GEMM=0 before sbatch.
+# --generation-config vllm: ignore the model's generation_config.json sampling defaults
+# (Qwen3 ships temperature 0.6 / top_k 20 / top_p 0.95); RL sampling must use exactly the
+# request's parameters, as Tinker does.
 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_NAME" \
     --host 0.0.0.0 \
@@ -67,6 +74,7 @@ python -m vllm.entrypoints.openai.api_server \
     --dtype "$VLLM_DTYPE" \
     --max-model-len "$VLLM_MAX_MODEL_LEN" \
     --enforce-eager \
+    --generation-config vllm \
     ${=VLLM_EXTRA_ARGS} \
     > "$LOG_DIR/vllm.log" 2>&1 &
 export VLLM_PID=$!

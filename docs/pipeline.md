@@ -346,6 +346,9 @@ Documented mismatches with Tinker (also logged at trainer startup):
   (`python -m lean_rl.tools.spike_lora_serving`); otherwise gpt-oss trains without `lm_head` LoRA.
 - Sampler (vLLM) vs trainer (HF) logprob numerics differ; the mean |delta| is logged per step. The loss ratio and entropy
   bonus use sampler logprobs, as on Tinker; only KL/reference logprobs come from the trainer.
+- Sampling parameters are exactly the request's (temperature 1.0, `top_p` 1, `top_k` disabled), as on Tinker: vLLM is
+  started with `--generation-config vllm` and every request sends `top_k`, so a model's `generation_config.json`
+  (Qwen3 ships `top_k=20`, `top_p=0.95`, temperature 0.6) never truncates RL samples.
 
 ---
 
@@ -413,6 +416,7 @@ python math_evaluation.py \
 | `LoRA rank mismatch loading <path>: adapter r=16, trainer lora_rank=32` | Stage 1 trained at one rank, stage 2 set a different rank | Make `LORA_RANK` match across stages |
 | `ValueError: Both load_checkpoint_path and init_from_adapter are set` | Both flags passed | Pick one (see "Adapter init priority" above) |
 | `RuntimeError: No usable rows in <dataset>` | All rows dropped (empty / too long / tokenizer-misaligned) | Check `problem_column`/`solution_column`, raise `max_seq_len`, try a different `model_name` (chat template matters) |
+| `vllm.log`: `HarmonyError: error downloading or loading vocab file ... /tmp/tiktoken-rs-cache ... Permission denied` (gpt-oss) | Another user owns the default harmony cache dir on that node | The sbatch scripts set a per-user `TIKTOKEN_RS_CACHE_DIR`; export it yourself when launching vLLM by hand |
 | `vllm.log` shows `DeepGEMM backend is not available` | gpt-oss path on a fresh env | Apply the DeepGEMM build patch in `slurm/README.md` |
 | `AssertionError: inputs.is_contiguous()` in `lora_shrink_op.py` | gpt-oss LoRA on un-patched vLLM | Apply the `.contiguous()` patch in `slurm/README.md` |
 | GptOss complains "sdpa not supported" | Default attn is sdpa | sbatch scripts already export `LOCAL_ATTN_IMPL=eager`; set it if running interactively |

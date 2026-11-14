@@ -50,6 +50,8 @@ def start_vllm_server(
         "--gpu-memory-utilization", str(gpu_memory_utilization),
         "--dtype", dtype,
         "--max-model-len", str(max_model_len),
+        # Ignore the model's generation_config.json sampling defaults (e.g. Qwen3 top_k=20).
+        "--generation-config", "vllm",
     ]
     if enable_lora:
         cmd += [

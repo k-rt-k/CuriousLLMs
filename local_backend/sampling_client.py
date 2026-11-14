@@ -138,14 +138,19 @@ class LocalSamplingClient:
             "n": num_samples,
             "temperature": sampling_params.temperature,
             "top_p": sampling_params.top_p,
+            # Always sent: when omitted, vLLM falls back to the model's generation_config
+            # (Qwen3: top_k=20), silently truncating RL samples. Tinker's default -1 = disabled.
+            "top_k": (
+                sampling_params.top_k
+                if sampling_params.top_k is not None and sampling_params.top_k > 0
+                else -1
+            ),
             "max_tokens": sampling_params.max_tokens,
             "logprobs": 1,
             # vLLM extension: return per-token ids in `tokens` as "token_id:NNNN".
             # Without this, `tokens` is detokenized text and we can't recover ids.
             "return_tokens_as_token_ids": True,
         }
-        if sampling_params.top_k is not None and sampling_params.top_k > 0:
-            body["top_k"] = sampling_params.top_k
         if sampling_params.seed is not None:
             body["seed"] = sampling_params.seed
         if stop_text is not None:

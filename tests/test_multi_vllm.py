@@ -41,6 +41,25 @@ def test_requests_spread_across_servers():
     assert all(v == 0 for v in client._in_flight.values())
 
 
+@pytest.mark.parametrize("top_k, sent", [(None, -1), (-1, -1), (0, -1), (20, 20)])
+def test_sample_request_always_sets_top_k(top_k, sent):
+    """Omitting top_k lets vLLM apply the model's generation_config (Qwen3: top_k=20)."""
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_ok_completion())
+
+    client = LocalSamplingClient(
+        vllm_urls=["http://a:1"], base_model_name="m", transport=httpx.MockTransport(handler),
+    )
+    kw = {} if top_k is None else {"top_k": top_k}
+    client.sample(tinker.ModelInput.from_ints([1, 2]), 1,
+                  tinker.SamplingParams(max_tokens=1, temperature=1.0, **kw))
+    assert bodies[0]["top_k"] == sent
+    assert bodies[0]["top_p"] == 1.0
+
+
 def test_in_flight_counter_released_on_error():
     def handler(request):
         return httpx.Response(500, text="boom")

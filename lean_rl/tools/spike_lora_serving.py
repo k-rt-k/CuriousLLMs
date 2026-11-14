@@ -4,10 +4,19 @@ Builds a PEFT model with the Task-1 placement, randomises every ``lora_B`` (seed
 adapter is non-trivial, saves it, loads it into a running vLLM server, and compares
 teacher-forced logprobs from vLLM against HF on four fixed prompts.
 
-PASS iff the adapter has an effect on both sides (HF and vLLM adapted-vs-base mean |d| >= 0.10)
-AND (mean |vLLM - HF(adapted)| <= 0.05 OR the LoRA delta agrees: mean |(vllm_ad - vllm_base) -
-(hf_ad - hf_base)| <= 0.05, which factors out the MXFP4-vs-bf16 base gap). Every outcome,
-including a server rejecting the adapter, emits a JSON verdict with a "diagnosis" field.
+Two measurements:
+- prompt path (diagnostic): vLLM prompt_logprobs vs HF on the fixed prompts. vLLM 0.20 applies
+  lm_head LoRA with a per-request sampler mapping, so this path under-applies an lm_head adapter;
+  training never reads it (KL/reference logprobs come from the trainer).
+- sampled path (decides): vLLM samples SAMPLES_PER_PROMPT x SAMPLE_TOKENS tokens with and without
+  the adapter, and its returned logprobs are compared with HF teacher-forced logprobs of the same
+  tokens. These are the logprobs training uses (importance-ratio denominator).
+
+PASS iff the adapter has an effect (HF adapted-vs-base mean |d| >= 0.10 on both paths, and vLLM's
+sampled logprobs differ from HF base by >= 0.10) AND on sampled tokens mean |vLLM - HF(adapted)|
+<= 0.05 or <= (the same gap for the base model) + 0.02, which factors out the MXFP4-vs-bf16 /
+kernel numerics of the base. Every outcome, including a server rejecting the adapter, emits a JSON
+verdict with a "diagnosis" field.
 
     python -m lean_rl.tools.spike_lora_serving --model Qwen/Qwen3-8B \
         --vllm-url http://localhost:8000 --out /tmp/spike --with-lm-head
@@ -27,6 +36,9 @@ from pathlib import Path
 
 MEAN_ABS_TOL = 0.05
 MIN_ADAPTER_EFFECT = 0.10
+SAMPLED_EXCESS_TOL = 0.02  # allowed vLLM-vs-HF gap beyond the base-model gap on sampled tokens
+SAMPLE_TOKENS = 48
+SAMPLES_PER_PROMPT = 4
 LORA_RANK = 8
 ADAPTER_NAME = "spike"
 PROMPTS = [
@@ -46,6 +58,7 @@ def parse_args(argv=None):
     p.add_argument("--with-lm-head", action="store_true", help="also put a LoRA adapter on lm_head")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--rank", type=int, default=LORA_RANK)
+    p.add_argument("--adapter-name", default=ADAPTER_NAME, help="vLLM adapter name (distinct per run on one server)")
     return p.parse_args(argv)
 
 
@@ -85,6 +98,10 @@ def run(args) -> dict:
     )
     if is_gpt_oss and _is_mxfp4(hf_config):
         load_kw.update(_gpt_oss_quant_kw())
+    if torch.device(args.device).type == "cuda":
+        # transformers' MXFP4 dequantize launches on the current device; loading onto another
+        # one hits an illegal memory access (gpt-oss, job 11146348). The trainer sets it too.
+        torch.cuda.set_device(args.device)
     model = AutoModelForCausalLM.from_pretrained(args.model, **load_kw)
     model.eval()
 
@@ -111,16 +128,18 @@ def run(args) -> dict:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    peft_model.save_pretrained(str(out))
+    # Same as Trainer.save_adapter: with lm_head targeted PEFT would otherwise also save the
+    # full base lm_head weight (lm_head.base_layer.weight) into the adapter.
+    peft_model.save_pretrained(str(out), save_embedding_layers=False)
     verdict = {"model": args.model, "with_lm_head": bool(args.with_lm_head)}
     try:
-        load_lora([args.vllm_url], ADAPTER_NAME, str(out.resolve()))
+        load_lora([args.vllm_url], args.adapter_name, str(out.resolve()))
     except Exception as e:  # server rejected the adapter: still emit a verdict
         verdict.update(pass_=False, error=f"{type(e).__name__}: {e}", diagnosis="adapter rejected by vLLM")
         return _finalize(verdict)
 
     adapted = LocalSamplingClient(
-        vllm_urls=[args.vllm_url], base_model_name=args.model, adapter_name=ADAPTER_NAME
+        vllm_urls=[args.vllm_url], base_model_name=args.model, adapter_name=args.adapter_name
     )
     # No adapter_name -> requests use the base model name (sampling_client._model_field).
     base = LocalSamplingClient(vllm_urls=[args.vllm_url], base_model_name=args.model)
@@ -138,8 +157,22 @@ def run(args) -> dict:
                         as_tensor(await base.compute_logprobs_async(mi))))
         return out
 
+    async def sample_all(prompt_ids):
+        params = tinker.SamplingParams(max_tokens=SAMPLE_TOKENS, temperature=1.0, seed=0)
+        out = []
+        for ids in prompt_ids:
+            mi = tinker.ModelInput.from_ints(ids)
+            out.append((await adapted.sample_async(mi, SAMPLES_PER_PROMPT, params),
+                        await base.sample_async(mi, SAMPLES_PER_PROMPT, params)))
+        return out
+
     all_ids = [tok(text, add_special_tokens=True)["input_ids"] for text in PROMPTS]
-    vllm_out = asyncio.run(query_all(all_ids))
+
+    async def all_requests(prompt_ids):
+        # A single asyncio.run for everything (see query_all).
+        return await query_all(prompt_ids), await sample_all(prompt_ids)
+
+    vllm_out, sampled = asyncio.run(all_requests(all_ids))
 
     cols = {k: [] for k in ("vs_hf", "base_gap", "delta_gap", "vllm_eff", "hf_eff")}
     for ids, (v_ad, v_base) in zip(all_ids, vllm_out):
@@ -151,6 +184,25 @@ def run(args) -> dict:
         cols["delta_gap"].append(((v_ad - v_base) - (h_ad - h_base)).abs())
         cols["vllm_eff"].append((v_ad - v_base).abs())
         cols["hf_eff"].append((h_ad - h_base).abs())
+    # Sampled path (what training consumes: the importance-ratio denominator). vLLM applies
+    # lm_head LoRA with a per-request (sampler) mapping, so prompt_logprobs over every prompt
+    # position can miss it; sampled-token logprobs must not.
+    for ids, (resp_ad, resp_base) in zip(all_ids, sampled):
+        for seq in resp_ad.sequences:
+            full = list(ids) + list(seq.tokens)
+            h_ad = _hf_logprobs(peft_model, full)[len(ids) - 1:]
+            with peft_model.disable_adapter():
+                h_base = _hf_logprobs(peft_model, full)[len(ids) - 1:]
+            v = torch.tensor(seq.logprobs, dtype=torch.float32)
+            cols.setdefault("s_vs_hf", []).append((v - h_ad).abs())
+            cols.setdefault("s_vllm_eff", []).append((v - h_base).abs())
+            cols.setdefault("s_hf_eff", []).append((h_ad - h_base).abs())
+        for seq in resp_base.sequences:
+            full = list(ids) + list(seq.tokens)
+            with peft_model.disable_adapter():
+                h_base = _hf_logprobs(peft_model, full)[len(ids) - 1:]
+            v = torch.tensor(seq.logprobs, dtype=torch.float32)
+            cols.setdefault("s_base_gap", []).append((v - h_base).abs())
     m = {k: float(torch.cat(v).mean()) for k, v in cols.items()}  # NaN propagates -> fails
     verdict.update(
         mean_abs_vs_hf=m["vs_hf"],
@@ -159,21 +211,34 @@ def run(args) -> dict:
         base_gap=m["base_gap"],
         lora_delta_gap=m["delta_gap"],
     )
+    verdict.update(
+        sampled_vs_hf=m["s_vs_hf"],
+        sampled_base_gap=m["s_base_gap"],
+        sampled_adapter_effect=m["s_hf_eff"],
+        sampled_vllm_vs_hf_base=m["s_vllm_eff"],
+    )
+    # Prompt path: diagnostic only (training never reads vLLM prompt_logprobs).
     close = m["vs_hf"] <= MEAN_ABS_TOL
     delta_ok = m["delta_gap"] <= MEAN_ABS_TOL
-    hf_ok = m["hf_eff"] >= MIN_ADAPTER_EFFECT
-    vllm_ok = m["vllm_eff"] >= MIN_ADAPTER_EFFECT
-    verdict["pass_"] = bool(hf_ok and vllm_ok and (close or delta_ok))
+    verdict["prompt_path_ok"] = bool(close or delta_ok)
+    # Sampled path decides: the adapter visibly moves the logprobs of vLLM's own samples, and
+    # vLLM-vs-HF(adapted) is within tolerance or adds at most SAMPLED_EXCESS_TOL on top of the
+    # base-model numerics gap measured the same way.
+    hf_ok = m["hf_eff"] >= MIN_ADAPTER_EFFECT and m["s_hf_eff"] >= MIN_ADAPTER_EFFECT
+    vllm_ok = m["s_vllm_eff"] >= MIN_ADAPTER_EFFECT
+    s_close = m["s_vs_hf"] <= MEAN_ABS_TOL
+    s_base_only = m["s_vs_hf"] <= m["s_base_gap"] + SAMPLED_EXCESS_TOL
+    verdict["pass_"] = bool(hf_ok and vllm_ok and (s_close or s_base_only))
     if not hf_ok:
         diag = "HF adapter has no effect (spike invalid)"
     elif not vllm_ok:
-        diag = "adapter not applied in vLLM"
-    elif close:
+        diag = "adapter not applied in vLLM sampling"
+    elif s_close:
         diag = "ok"
-    elif delta_ok:
-        diag = "base quantization gap only"
+    elif s_base_only:
+        diag = "base numerics gap only"
     else:
-        diag = "lora mismatch"
+        diag = "lora mismatch on sampled tokens"
     verdict["diagnosis"] = diag
     return _finalize(verdict)
 

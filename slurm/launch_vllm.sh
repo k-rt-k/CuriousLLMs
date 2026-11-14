@@ -89,13 +89,15 @@ cleanup_vllm() {
 }
 trap cleanup_vllm EXIT INT TERM
 
-echo "[launch_vllm] waiting for vLLM at $VLLM_URL/health ..."
+# Cold reads from /data are slow on Babel (Qwen3-8B weights took 801 s), so the default is 40 min.
+: "${VLLM_STARTUP_TIMEOUT_S:=2400}"
+echo "[launch_vllm] waiting for vLLM at $VLLM_URL/health (timeout ${VLLM_STARTUP_TIMEOUT_S}s) ..."
 attempts=0
 until curl -sf "$VLLM_URL/health" > /dev/null; do
     sleep 3
     attempts=$((attempts + 1))
-    if (( attempts > 200 )); then
-        echo "[launch_vllm] vLLM did not come up in time" >&2
+    if (( attempts * 3 > VLLM_STARTUP_TIMEOUT_S )); then
+        echo "[launch_vllm] vLLM did not come up in ${VLLM_STARTUP_TIMEOUT_S}s" >&2
         tail -n 100 "$LOG_DIR/vllm.log" >&2 || true
         exit 1
     fi

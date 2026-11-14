@@ -46,7 +46,7 @@
 #   sbatch --nodes=2 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 #
 # Env knobs: MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN
-# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
+# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC VLLM_STARTUP_TIMEOUT_S(2400) GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
 # EXTRA_ARGS ("key=value ..." forwarded to lean_rl.train). Optional pass-through when set:
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
@@ -77,6 +77,7 @@ cd "$REPO_DIR"
 : "${FSDP:=0}"
 : "${GPT_OSS_LM_HEAD:=1}"  # Tinker parity (lm_head LoRA); needs lean_rl/vllm_plugin installed
 : "${MAX_TOKENS:=2048}"
+: "${VLLM_STARTUP_TIMEOUT_S:=2400}"  # cold /data weight reads on Babel can take >13 min
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
 
@@ -225,7 +226,7 @@ echo "[lean] LOG_DIR=$LOG_DIR"
 
 (
     export CUDA_VISIBLE_DEVICES="$VLLM_VISIBLE"
-    export VLLM_PORT VLLM_TP_SIZE VLLM_GPU_MEM_FRAC MODEL_NAME LORA_RANK LOG_DIR
+    export VLLM_PORT VLLM_TP_SIZE VLLM_GPU_MEM_FRAC MODEL_NAME LORA_RANK LOG_DIR VLLM_STARTUP_TIMEOUT_S
     [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && export VLLM_PLUGINS=lean_rl_gpt_oss_lm_head
     source slurm/launch_vllm.sh
     wait $VLLM_PID
@@ -270,8 +271,8 @@ until curl -sf "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null; do
     fi
     sleep 5
     attempts=$((attempts + 1))
-    if (( attempts > 240 )); then
-        echo "[lean] vLLM not ready after 20 min" >&2
+    if (( attempts * 5 > VLLM_STARTUP_TIMEOUT_S + 60 )); then   # launch_vllm.sh gives up first
+        echo "[lean] vLLM not ready after ${VLLM_STARTUP_TIMEOUT_S}s" >&2
         tail -200 "$LOG_DIR/vllm.log" >&2 || true
         exit 1
     fi

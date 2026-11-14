@@ -274,7 +274,7 @@ sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FS
 
 Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
 `GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `MAX_TOKENS` (2048), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
-`VLLM_GPU_MEM_FRAC` (0.85), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
+`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (2400; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
 `GPT_OSS_LM_HEAD` (1|0, default 1), `LOG_DIR`, `DRY_RUN` (1 prints the hostfile, per-rank `RANK`/`LOCAL_RANK`/GPU mapping and the srun/trainer commands). Passed through only when
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
 (RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` (default) with a gpt-oss model

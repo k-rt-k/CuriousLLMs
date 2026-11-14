@@ -278,3 +278,15 @@ def test_missing_rnd_embeddings_fail_at_startup(tiny_model_dir, tmp_path, monkey
     with pytest.raises(FileNotFoundError, match="use_rnd_curiosity=False"):
         asyncio.run(run(cfg, transport=None))
     assert not built
+
+
+def test_missing_gemini_key_fails_at_startup(tiny_model_dir, tmp_path, monkeypatch):
+    from lean_rl import loop as loop_mod
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    built = []
+    monkeypatch.setattr(loop_mod._Loop, "_build_trainer", lambda self: built.append(1))
+    cfg = _cfg(tiny_model_dir, str(tmp_path / "log"), use_reasoning_rewards=True)
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        asyncio.run(run(cfg, transport=None))
+    assert not built

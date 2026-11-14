@@ -303,6 +303,12 @@ Slurm's SIGTERM directly; the ranks agree on it during rollouts/evals, after the
 
 ```bash
 mkdir -p /home/ksnair/CuriousLLMs_logs   # once
+# Defaults need two inputs; the run stops at startup if either is missing:
+#  - GEMINI_API_KEY (reasoning judge) exported in the submitting shell (--export=ALL passes it on);
+#    else EXTRA_ARGS=use_reasoning_rewards=False
+#  - embeddings/embeddings_gte_10000.pkl in the repo root (RND normaliser; not in git, made by the
+#    RND_experimentation notebooks); else EXTRA_ARGS=use_rnd_curiosity=False
+set -a; source .env; set +a
 
 # Qwen3-8B, 1 node, replicated trainer (vLLM on GPU 0, 7 trainer ranks) -- fits 48 GB cards
 sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh

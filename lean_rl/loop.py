@@ -151,7 +151,13 @@ def _validate(cfg: LeanRLConfig) -> None:
         raise ValueError("kl_reference=init requires init_from_adapter to be set.")
     if cfg.save_every <= 0:
         raise ValueError("save_every must be >= 1")
-    # Checked up front: RND is built after the model and vLLM are up (20+ min on Babel).
+    # Checked up front: the judge and RND are built after the model, vLLM and the datasets are
+    # up (30+ min on Babel).
+    if cfg.use_reasoning_rewards and not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError(
+            "use_reasoning_rewards=True needs GEMINI_API_KEY in the environment (export it before "
+            "sbatch, e.g. `set -a; source .env; set +a`) or pass use_reasoning_rewards=False."
+        )
     if cfg.use_rnd_curiosity and not os.path.exists(RND_EMBEDDINGS_FILE):
         raise FileNotFoundError(
             f"use_rnd_curiosity=True needs the precomputed RND embeddings {RND_EMBEDDINGS_FILE!r} "

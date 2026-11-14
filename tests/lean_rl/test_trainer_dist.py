@@ -338,13 +338,13 @@ def test_bf16_base_fp32_lora(tiny_model_dir, tmp_path, fsdp):
     # Before the step only the LoRA compute dtype differs (FSDP param_dtype=bf16 vs PEFT's
     # fp32 LoRA): ~1e-2. After one AdamW step the per-element normalisation turns bf16 noise
     # in tiny grads into lr-sized weight differences, so allow more (observed 0.077 on CPU).
-    # Replicated on CPU is bit-exact; on CUDA the per-rank micro-batches pick different bf16
-    # kernels than the 1-rank run (observed 4.6e-3 on L40), so it gets the bf16 tolerance too.
-    exact = not fsdp and DEVICE != "cuda"
+    # Replicated is not bit-exact either: the per-rank micro-batches have other shapes than the
+    # 1-rank run, so bf16 GEMMs pick other kernels / reduction orders (observed 4.6e-3 on L40,
+    # 7.5e-4 on some Babel CPU nodes, 0 on others), so it gets the bf16 tolerance too.
     for key, atol in (("lp0", BF16_ATOL), ("lp1", 0.15)):
         for a, b in zip(one[key], two[key]):
             assert torch.isfinite(b).all()
-            torch.testing.assert_close(b, a, atol=1e-5 if exact else atol, rtol=0)
+            torch.testing.assert_close(b, a, atol=atol, rtol=0)
     for k in ("loss", "grad_norm"):
         assert math.isfinite(two["m"][k])
         assert abs(two["m"][k] - one["m"][k]) <= 0.05 * max(1.0, abs(one["m"][k])), k

@@ -46,7 +46,7 @@
 #   sbatch --nodes=2 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 #
 # Env knobs: MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN
-# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(0|1) LOG_DIR
+# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
 # EXTRA_ARGS ("key=value ..." forwarded to lean_rl.train). Optional pass-through when set:
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
@@ -187,7 +187,8 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SL
 mkdir -p "$TRITON_CACHE_DIR"
 # openai_harmony (gpt-oss tokenizer in vLLM) caches vocab files in /tmp/tiktoken-rs-cache by
 # default; on shared nodes another user may own it (Permission denied -> vLLM dies at startup).
-export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-${TMPDIR:-/tmp}/tiktoken-rs-${USER}}"
+# Persistent per-user dir (a per-job $TMPDIR would re-download the vocab every job).
+export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-/data/hf_cache/${USER}/tiktoken-rs}"
 mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 
 # ---- rank: one srun task per trainer rank ----------------------------------
@@ -208,7 +209,12 @@ if [[ "$1" == "--rank" ]]; then
 fi
 
 # ---- parent (node 0): vLLM, then srun the ranks ---------------------------
-if [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! python -c "import lean_rl_vllm_plugin" 2>/dev/null; then
+# Checks the vllm.general_plugins entry point is registered (and importable); stderr kept so a
+# broken install is not misreported as missing. Not run under DRY_RUN.
+if [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! python -c "
+import importlib.metadata as md, sys
+eps = [e for e in md.entry_points(group='vllm.general_plugins') if e.name == 'lean_rl_gpt_oss_lm_head']
+sys.exit(0 if eps and eps[0].load() else 1)"; then
     echo "[lean] gpt-oss with GPT_OSS_LM_HEAD=1 (default) needs the vLLM lm_head plugin:" >&2
     echo "[lean]   python -m pip install --no-deps -e lean_rl/vllm_plugin" >&2
     echo "[lean] or set GPT_OSS_LM_HEAD=0 to train without lm_head LoRA (documented Tinker mismatch)." >&2

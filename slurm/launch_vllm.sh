@@ -32,7 +32,8 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SL
 mkdir -p "$TRITON_CACHE_DIR"
 # openai_harmony (gpt-oss tokenizer in vLLM) caches vocab files in /tmp/tiktoken-rs-cache by
 # default; on shared nodes another user may own it (Permission denied -> vLLM dies at startup).
-export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-${TMPDIR:-/tmp}/tiktoken-rs-${USER}}"
+# Persistent per-user dir (a per-job $TMPDIR would re-download the vocab every job).
+export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-/data/hf_cache/${USER}/tiktoken-rs}"
 mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 : "${VLLM_EXTRA_ARGS:=}"
 

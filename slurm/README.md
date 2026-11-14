@@ -279,7 +279,7 @@ Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
 (RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` (default) with a gpt-oss model
 sets `VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` for the trainer, and the job exits at
-startup if the plugin is not installed; the attention implementation is chosen automatically by the
+startup (not under `DRY_RUN`) if the plugin is not installed; the attention implementation is chosen automatically by the
 trainer (eager for gpt-oss, sdpa otherwise); override with `EXTRA_ARGS="attn_implementation=..."`.
 `preempt_qos` caps a user at 24 GPUs, so keep `--nodes` x GPUs per node under that. On preemption (GraceTime 0,
 KillWait 120 s) each rank is a Slurm task and gets SIGTERM directly (no torchelastic, which would SIGKILL ranks after
@@ -311,7 +311,7 @@ Documented mismatches with Tinker (also logged at trainer startup):
 - Sampler (vLLM) vs trainer (HF) logprob numerics differ; the mean |delta| is logged per step. The loss ratio and entropy
   bonus use sampler logprobs, as on Tinker; only KL/reference logprobs come from the trainer.
 - Sampling parameters are exactly the request's (temperature 1.0, `top_p` 1, `top_k` disabled), as on Tinker: vLLM is
-  started with `--generation-config vllm` and every request sends `top_k`, so a model's `generation_config.json`
+  started with `--generation-config vllm` and every sampling request sends `top_k`, so a model's `generation_config.json`
   (Qwen3 ships `top_k=20`, `top_p=0.95`, temperature 0.6) never truncates RL samples.
 
 ## Memory rules of thumb

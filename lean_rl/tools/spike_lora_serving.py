@@ -39,6 +39,7 @@ MEAN_ABS_TOL = 0.05
 MIN_ADAPTER_EFFECT = 0.10
 SAMPLED_EXCESS_TOL = 0.02  # allowed vLLM-vs-HF gap beyond the base-model gap on sampled tokens
 SAMPLE_TOKENS = 48
+MAX_BASE_GAP = 0.1  # above this the base-relative criterion is not trusted
 SAMPLES_PER_PROMPT = 4
 LORA_RANK = 8
 ADAPTER_NAME = "spike"
@@ -238,9 +239,13 @@ def run(args) -> dict:
     # vLLM-vs-HF(adapted) is within tolerance or adds at most SAMPLED_EXCESS_TOL on top of the
     # base-model numerics gap measured the same way.
     hf_ok = m["hf_eff"] >= MIN_ADAPTER_EFFECT and m["s_hf_eff"] >= MIN_ADAPTER_EFFECT
-    vllm_ok = m["s_vllm_eff"] >= MIN_ADAPTER_EFFECT
+    # vLLM's samples must move away from HF base by more than the base numerics gap alone.
+    vllm_ok = m["s_vllm_eff"] >= m["s_base_gap"] + MIN_ADAPTER_EFFECT
     s_close = m["s_vs_hf"] <= MEAN_ABS_TOL
-    s_base_only = m["s_vs_hf"] <= m["s_base_gap"] + SAMPLED_EXCESS_TOL
+    # Relative criterion only while the base gap itself is sane (an MXFP4/bf16 regression with a
+    # large base gap must not make any adapter pass).
+    s_base_only = (m["s_base_gap"] <= MAX_BASE_GAP
+                   and m["s_vs_hf"] <= m["s_base_gap"] + SAMPLED_EXCESS_TOL)
     verdict["pass_"] = bool(hf_ok and vllm_ok and (s_close or s_base_only))
     if not hf_ok:
         diag = "HF adapter has no effect (spike invalid)"

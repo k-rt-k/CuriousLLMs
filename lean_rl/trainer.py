@@ -322,7 +322,7 @@ class Trainer:
         reduced in bf16 and assigned to the fp32 shards (torch >= 2.11 raises on that). Every
         rank calls this from ``__init__``, so the all-gathers line up.
         """
-        self._forward_logp([([0, 0], [0, 0])])
+        self._forward_logp([_DUMMY_PAIR])
         self._reshard()
 
     def _reshard(self) -> None:

@@ -189,11 +189,14 @@ def _proc_bf16(rank, world_size, port, model_dir, out_dir, fsdp):
     # requires_grad off). FSDP2 must still reduce LoRA grads in fp32 and cast them back to the
     # fp32 shards; torch >= 2.11 raises on a bf16 grad, older versions silently keep it.
     tr.logprobs(data, "base")
+    checked = 0
     for m in tr._fsdp_modules:
         group = m._get_fsdp_state()._fsdp_param_group
         if group is not None and any(p.sharded_param.requires_grad for p in group.fsdp_params):
             assert group._orig_dtype == torch.float32, group._orig_dtype
             assert group._reduce_dtype == torch.float32, group._reduce_dtype
+            checked += 1
+    assert checked > 0 or not tr.fsdp, "no FSDP param group with LoRA params found (torch internals changed?)"
     out = {"lp0": tr.logprobs(data, "policy")}
     out["m"] = tr.train_step(data, "ppo", tinker.AdamParams(**ADAM, grad_clip_norm=1.0))
     out["lp1"] = tr.logprobs(data, "policy")

@@ -259,6 +259,7 @@ class Trainer:
             self._apply_fsdp()
             self._load_fsdp_from_rank0(full_sd)
             del full_sd
+            self._fsdp_lazy_init()
         elif dist is not None:
             self._broadcast_lora_from_rank0()
 
@@ -309,6 +310,20 @@ class Trainer:
         # Non-persistent buffers (e.g. rotary inv_freq) are not in the state dict.
         for b in self._head.buffers():
             tdist.broadcast(b, src=0)
+
+    @torch.no_grad()
+    def _fsdp_lazy_init(self) -> None:
+        """Run one tiny forward with the adapter enabled so FSDP2 lazy-inits now.
+
+        FSDP2 fixes each param group's gradient dtypes (orig/reduce) at its first forward, from
+        the params that have ``requires_grad`` at that moment. PEFT's ``disable_adapter()`` sets
+        ``requires_grad=False`` on every LoRA param, so if the first forward were a KL
+        ``which="base"`` pass the groups would see no trainable params: LoRA grads would then be
+        reduced in bf16 and assigned to the fp32 shards (torch >= 2.11 raises on that). Every
+        rank calls this from ``__init__``, so the all-gathers line up.
+        """
+        self._forward_logp([([0, 0], [0, 0])])
+        self._reshard()
 
     def _reshard(self) -> None:
         """Free unsharded FSDP params (the root stays unsharded after a no-grad forward).

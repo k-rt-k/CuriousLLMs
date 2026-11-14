@@ -185,6 +185,15 @@ def _proc_bf16(rank, world_size, port, model_dir, out_dir, fsdp):
             full[n] = 0.05 * torch.randn(full[n].shape, generator=g)
     tr._lora_assign(full)
     data = _make_data()
+    # The loop's first forward is the KL "base" pass (PEFT disable_adapter flips LoRA
+    # requires_grad off). FSDP2 must still reduce LoRA grads in fp32 and cast them back to the
+    # fp32 shards; torch >= 2.11 raises on a bf16 grad, older versions silently keep it.
+    tr.logprobs(data, "base")
+    for m in tr._fsdp_modules:
+        group = m._get_fsdp_state()._fsdp_param_group
+        if group is not None and any(p.sharded_param.requires_grad for p in group.fsdp_params):
+            assert group._orig_dtype == torch.float32, group._orig_dtype
+            assert group._reduce_dtype == torch.float32, group._reduce_dtype
     out = {"lp0": tr.logprobs(data, "policy")}
     out["m"] = tr.train_step(data, "ppo", tinker.AdamParams(**ADAM, grad_clip_norm=1.0))
     out["lp1"] = tr.logprobs(data, "policy")
@@ -326,10 +335,13 @@ def test_bf16_base_fp32_lora(tiny_model_dir, tmp_path, fsdp):
     # Before the step only the LoRA compute dtype differs (FSDP param_dtype=bf16 vs PEFT's
     # fp32 LoRA): ~1e-2. After one AdamW step the per-element normalisation turns bf16 noise
     # in tiny grads into lr-sized weight differences, so allow more (observed 0.077 on CPU).
+    # Replicated on CPU is bit-exact; on CUDA the per-rank micro-batches pick different bf16
+    # kernels than the 1-rank run (observed 4.6e-3 on L40), so it gets the bf16 tolerance too.
+    exact = not fsdp and DEVICE != "cuda"
     for key, atol in (("lp0", BF16_ATOL), ("lp1", 0.15)):
         for a, b in zip(one[key], two[key]):
             assert torch.isfinite(b).all()
-            torch.testing.assert_close(b, a, atol=atol if fsdp else 1e-5, rtol=0)
+            torch.testing.assert_close(b, a, atol=1e-5 if exact else atol, rtol=0)
     for k in ("loss", "grad_norm"):
         assert math.isfinite(two["m"][k])
         assert abs(two["m"][k] - one["m"][k]) <= 0.05 * max(1.0, abs(one["m"][k])), k

@@ -18,6 +18,7 @@ Prints a one-line JSON verdict as the last stdout line; exit code 0 iff PASS.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import math
@@ -62,15 +63,29 @@ def run(args) -> dict:
     import torch
     import tinker
     from peft import get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     from lean_rl.lora import log_parity_warnings, lora_placement, make_lora_config
+    from lean_rl.trainer import _gpt_oss_quant_kw, _is_mxfp4
     from local_backend.sampling_client import LocalSamplingClient
     from local_backend.weight_sync import load_lora
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
     tok = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16).to(args.device)
+    hf_config = AutoConfig.from_pretrained(args.model)
+    is_gpt_oss = getattr(hf_config, "model_type", "") == "gpt_oss"
+    load_kw = dict(
+        torch_dtype=torch.bfloat16,
+        # Straight onto --device: a CPU load followed by .to() dequantizes gpt-oss's MXFP4
+        # experts on the default GPU, which is the one vLLM occupies.
+        device_map={"": args.device},
+        # Same as the trainer: eager attention (HF gpt-oss needs it for attention sinks) and an
+        # explicit MXFP4 dequantize.
+        attn_implementation="eager" if is_gpt_oss else "sdpa",
+    )
+    if is_gpt_oss and _is_mxfp4(hf_config):
+        load_kw.update(_gpt_oss_quant_kw())
+    model = AutoModelForCausalLM.from_pretrained(args.model, **load_kw)
     model.eval()
 
     model_type = model.config.model_type
@@ -110,14 +125,24 @@ def run(args) -> dict:
     # No adapter_name -> requests use the base model name (sampling_client._model_field).
     base = LocalSamplingClient(vllm_urls=[args.vllm_url], base_model_name=args.model)
 
-    def vllm_lp(client, ids):
-        lp = client.compute_logprobs(tinker.ModelInput.from_ints(ids))[1:]
-        return torch.tensor([float("nan") if v is None else v for v in lp])
+    def as_tensor(lp):
+        return torch.tensor([float("nan") if v is None else v for v in lp[1:]])
+
+    async def query_all(prompt_ids):
+        # One event loop for every request: the clients keep an httpx.AsyncClient bound to the
+        # loop they first ran on, so per-call asyncio.run() fails from the second call on.
+        out = []
+        for ids in prompt_ids:
+            mi = tinker.ModelInput.from_ints(ids)
+            out.append((as_tensor(await adapted.compute_logprobs_async(mi)),
+                        as_tensor(await base.compute_logprobs_async(mi))))
+        return out
+
+    all_ids = [tok(text, add_special_tokens=True)["input_ids"] for text in PROMPTS]
+    vllm_out = asyncio.run(query_all(all_ids))
 
     cols = {k: [] for k in ("vs_hf", "base_gap", "delta_gap", "vllm_eff", "hf_eff")}
-    for text in PROMPTS:
-        ids = tok(text, add_special_tokens=True)["input_ids"]
-        v_ad, v_base = vllm_lp(adapted, ids), vllm_lp(base, ids)
+    for ids, (v_ad, v_base) in zip(all_ids, vllm_out):
         h_ad = _hf_logprobs(peft_model, ids)
         with peft_model.disable_adapter():
             h_base = _hf_logprobs(peft_model, ids)

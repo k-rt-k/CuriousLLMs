@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -58,6 +59,9 @@ def parse_args(argv=None):
     p.add_argument("--with-lm-head", action="store_true", help="also put a LoRA adapter on lm_head")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--rank", type=int, default=LORA_RANK)
+    p.add_argument("--b-std", type=float, default=0.02, help="std of the random lora_B init")
+    p.add_argument("--zero-b-regex", default=None,
+                   help="keep lora_B at zero for params whose name matches (ablation: e.g. 'experts')")
     p.add_argument("--adapter-name", default=ADAPTER_NAME, help="vLLM adapter name (distinct per run on one server)")
     return p.parse_args(argv)
 
@@ -118,20 +122,29 @@ def run(args) -> dict:
     peft_model = get_peft_model(model, make_lora_config(placement, args.rank))
 
     torch.manual_seed(0)
+    zero_re = re.compile(args.zero_b_regex) if args.zero_b_regex else None
     n_b = 0
     with torch.no_grad():
         for name, p in peft_model.named_parameters():
             if "lora_B" in name:
-                p.copy_((torch.randn(p.shape, dtype=torch.float32) * 0.02).to(p.dtype))
+                # Draw for every lora_B so the ablations keep the other modules' values.
+                val = torch.randn(p.shape, dtype=torch.float32) * args.b_std
+                if zero_re is not None and zero_re.search(name):
+                    continue
+                p.copy_(val.to(p.dtype))
                 n_b += 1
     print(f"randomised {n_b} lora_B tensors", file=sys.stderr)
+    for name, p in peft_model.named_parameters():  # layer-0 LoRA names, for --zero-b-regex
+        if "lora_" in name and ".layers.0." in name:
+            print(f"  {name} {tuple(p.shape)}", file=sys.stderr)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     # Same as Trainer.save_adapter: with lm_head targeted PEFT would otherwise also save the
     # full base lm_head weight (lm_head.base_layer.weight) into the adapter.
     peft_model.save_pretrained(str(out), save_embedding_layers=False)
-    verdict = {"model": args.model, "with_lm_head": bool(args.with_lm_head)}
+    verdict = {"model": args.model, "with_lm_head": bool(args.with_lm_head),
+               "b_std": args.b_std, "zero_b_regex": args.zero_b_regex}
     try:
         load_lora([args.vllm_url], args.adapter_name, str(out.resolve()))
     except Exception as e:  # server rejected the adapter: still emit a verdict

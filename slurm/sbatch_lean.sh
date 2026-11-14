@@ -36,9 +36,9 @@
 # Examples:
 #   # Qwen3-8B, 1 node, replicated trainer (7 trainer ranks, vLLM on GPU 0):
 #   sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
-#   # gpt-oss-20b on 80 GB+ cards, replicated, lm_head plugin on:
+#   # gpt-oss-20b on 80 GB+ cards, replicated (lm_head plugin on by default, GPT_OSS_LM_HEAD=1):
 #   sbatch --gres=gpu:A100_80GB:4 \
-#          --export=ALL,MODEL_NAME=openai/gpt-oss-20b,GPT_OSS_LM_HEAD=1 slurm/sbatch_lean.sh
+#          --export=ALL,MODEL_NAME=openai/gpt-oss-20b slurm/sbatch_lean.sh
 #   # gpt-oss-20b on 8x48 GB (FSDP shards the trainer; vLLM TP=1 on GPU 0):
 #   sbatch --gres=gpu:L40S:8 \
 #          --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FSDP=1 slurm/sbatch_lean.sh
@@ -75,7 +75,7 @@ cd "$REPO_DIR"
 : "${VLLM_TP_SIZE:=1}"
 : "${GPUS_PER_NODE:=${SLURM_GPUS_ON_NODE:-8}}"
 : "${FSDP:=0}"
-: "${GPT_OSS_LM_HEAD:=0}"
+: "${GPT_OSS_LM_HEAD:=1}"  # Tinker parity (lm_head LoRA); needs lean_rl/vllm_plugin installed
 : "${MAX_TOKENS:=2048}"
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
@@ -208,6 +208,12 @@ if [[ "$1" == "--rank" ]]; then
 fi
 
 # ---- parent (node 0): vLLM, then srun the ranks ---------------------------
+if [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! python -c "import lean_rl_vllm_plugin" 2>/dev/null; then
+    echo "[lean] gpt-oss with GPT_OSS_LM_HEAD=1 (default) needs the vLLM lm_head plugin:" >&2
+    echo "[lean]   python -m pip install --no-deps -e lean_rl/vllm_plugin" >&2
+    echo "[lean] or set GPT_OSS_LM_HEAD=0 to train without lm_head LoRA (documented Tinker mismatch)." >&2
+    exit 1
+fi
 mkdir -p "$LOG_DIR"
 echo "[lean] LOG_DIR=$LOG_DIR"
 

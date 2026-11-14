@@ -307,8 +307,8 @@ mkdir -p /home/ksnair/CuriousLLMs_logs   # once
 # Qwen3-8B, 1 node, replicated trainer (vLLM on GPU 0, 7 trainer ranks) -- fits 48 GB cards
 sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 
-# gpt-oss-20b on 80 GB+ cards, replicated; lm_head plugin on (requires the plugin install, see below)
-sbatch --gres=gpu:A100_80GB:4 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,GPT_OSS_LM_HEAD=1 slurm/sbatch_lean.sh
+# gpt-oss-20b on 80 GB+ cards, replicated; lm_head LoRA on by default (requires the plugin install, see below)
+sbatch --gres=gpu:A100_80GB:4 --export=ALL,MODEL_NAME=openai/gpt-oss-20b slurm/sbatch_lean.sh
 
 # gpt-oss-20b on 8x48 GB: FSDP2 shards the frozen base across the trainer ranks
 sbatch --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FSDP=1 slurm/sbatch_lean.sh
@@ -320,10 +320,11 @@ sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FS
 Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
 `GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `MAX_TOKENS` (2048), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
 `VLLM_GPU_MEM_FRAC` (0.85), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
-`GPT_OSS_LM_HEAD` (0|1), `LOG_DIR`, `DRY_RUN` (1 prints the hostfile, per-rank `RANK`/`LOCAL_RANK`/GPU mapping and the srun/trainer commands). Passed through only when
+`GPT_OSS_LM_HEAD` (1|0, default 1), `LOG_DIR`, `DRY_RUN` (1 prints the hostfile, per-rank `RANK`/`LOCAL_RANK`/GPU mapping and the srun/trainer commands). Passed through only when
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
-(RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` with a gpt-oss model sets
-`VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` for the trainer; the attention implementation is chosen automatically by the
+(RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` (default) with a gpt-oss model
+sets `VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` for the trainer, and the job exits at
+startup if the plugin is not installed; the attention implementation is chosen automatically by the
 trainer (eager for gpt-oss, sdpa otherwise); override with `EXTRA_ARGS="attn_implementation=..."`.
 `preempt_qos` caps a user at 24 GPUs, so keep `--nodes` x GPUs per node under that. On preemption (GraceTime 0,
 KillWait 120 s) each rank is a Slurm task and gets SIGTERM directly (no torchelastic, which would SIGKILL ranks after
@@ -341,9 +342,17 @@ Documented mismatches with Tinker (also logged at trainer startup):
 
 - **MoE per-expert LoRA rank.** PEFT/vLLM give each expert its own rank-`r` LoRA. Tinker's per-expert rank for production
   MoE LoRA is undocumented (its LoRA blog experiment used total rank / active experts), so the equivalence is unverified.
-- **gpt-oss `lm_head`.** vLLM 0.20.2 rejects adapters with `lm_head` for gpt-oss. `lm_head` LoRA is trained only when the
-  `lean_rl/vllm_plugin` plugin is installed, enabled (`GPT_OSS_LM_HEAD=1`) and passes the GPU spike
-  (`python -m lean_rl.tools.spike_lora_serving`); otherwise gpt-oss trains without `lm_head` LoRA.
+- **gpt-oss `lm_head`.** vLLM 0.20.2 rejects adapters with `lm_head` for gpt-oss unless the `lean_rl/vllm_plugin` plugin
+  is installed. With the plugin (the default, `GPT_OSS_LM_HEAD=1`) the placement matches Tinker; with
+  `GPT_OSS_LM_HEAD=0` gpt-oss trains without `lm_head` LoRA, a mismatch logged at startup.
+- **Verified on GPU (vLLM 0.20.2, `python -m lean_rl.tools.spike_lora_serving`).** vLLM's logprobs of its own samples match
+  HF teacher-forced logprobs with the adapter, within the base-model gap + 0.02:
+  Qwen3-8B with and without `lm_head` (gap 0.019 / 0.016, base 0.016);
+  gpt-oss-20b experts-only (0.031, base 0.024) and the full placement incl. experts at moderate adapter size (0.029, base
+  0.026). The gpt-oss error grows superlinearly only for extreme attention adapters (mean effect 0.8 nats/token: 0.12),
+  i.e. bf16 numerics, not a weight-mapping error; the `lm_head` plugin adds no error. vLLM's *prompt* logprobs apply
+  `lm_head` LoRA with the per-request sampler mapping and under-apply it; training never reads them (KL/reference
+  logprobs come from the trainer).
 - Sampler (vLLM) vs trainer (HF) logprob numerics differ; the mean |delta| is logged per step. The loss ratio and entropy
   bonus use sampler logprobs, as on Tinker; only KL/reference logprobs come from the trainer.
 - Sampling parameters are exactly the request's (temperature 1.0, `top_p` 1, `top_k` disabled), as on Tinker: vLLM is

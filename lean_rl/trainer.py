@@ -225,6 +225,9 @@ class Trainer:
                 base_model, low_cpu_mem_usage=True, **pretrained_kw
             )
         elif torch.device(device).type == "cuda":
+            # MXFP4 dequantize runs on the *current* CUDA device regardless of device_map.
+            if torch.device(device).index is not None:
+                torch.cuda.set_device(device)
             base = AutoModelForCausalLM.from_pretrained(
                 base_model, device_map={"": device}, **pretrained_kw
             )

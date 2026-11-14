@@ -118,16 +118,28 @@ class _Comm:
         return self._ldist.any_true(local)
 
 
+def _single_device(cuda: bool) -> str:
+    """Single-rank device. LOCAL_RANK, when set, is the physical GPU (sbatch_lean.sh with one
+    trainer GPU: vLLM owns GPU 0, the trainer gets LOCAL_RANK=1); plain "cuda" would be GPU 0."""
+    if not cuda:
+        return "cpu"
+    local = os.environ.get("LOCAL_RANK")
+    if not local:
+        return "cuda"
+    torch.cuda.set_device(int(local))
+    return f"cuda:{int(local)}"
+
+
 def _init_rank() -> tuple[_Rank, str]:
     world = int(os.environ.get("WORLD_SIZE", "1") or "1")
     cuda = torch.cuda.is_available()
     if world <= 1:
-        return _Rank(), "cuda" if cuda else "cpu"
+        return _Rank(), _single_device(cuda)
     from lean_rl import dist as ldist
 
     info = ldist.init_dist()
     if info is None:
-        return _Rank(), "cuda" if cuda else "cpu"
+        return _Rank(), _single_device(cuda)
     device = f"cuda:{info.local_rank}" if cuda else "cpu"
     if cuda:
         torch.cuda.set_device(info.local_rank)

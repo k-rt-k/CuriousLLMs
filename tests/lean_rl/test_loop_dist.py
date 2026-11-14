@@ -206,3 +206,25 @@ def test_two_rank_vllm_dies_during_adapter_sync(tiny_model_dir, tmp_path):
     assert r0["lora_loads"] == 2 and r1["lora_loads"] == 0
     assert [r["step"] for r in _rows(log)] == [0, 1]
     assert _ckpts(log) == ["step_000002"]  # step 2 completed; its sync failed
+
+
+@pytest.mark.parametrize(
+    "local_rank, expected", [(None, "cuda"), ("1", "cuda:1"), ("3", "cuda:3")]
+)
+def test_single_rank_device_honours_local_rank(monkeypatch, local_rank, expected):
+    """One trainer GPU (sbatch_lean.sh --gres=gpu:2): vLLM owns GPU 0 and the trainer gets
+    LOCAL_RANK=1. Plain "cuda" would put the trainer on vLLM's GPU (smoke job 11150506 OOM)."""
+    from lean_rl import loop
+
+    picked: list[int] = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda d: picked.append(d))
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    if local_rank is None:
+        monkeypatch.delenv("LOCAL_RANK", raising=False)
+    else:
+        monkeypatch.setenv("LOCAL_RANK", local_rank)
+    r, device = loop._init_rank()
+    assert device == expected
+    assert r.info is None
+    assert picked == ([] if local_rank is None else [int(local_rank)])

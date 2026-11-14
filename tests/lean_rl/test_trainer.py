@@ -291,6 +291,45 @@ def test_gpt_oss_expert_lora_gets_grads(tmp_path):
         assert p.grad is not None and p.grad.abs().sum() > 0, n
 
 
+def test_gpt_oss_expert_merge_built_once_per_forward(tmp_path, monkeypatch):
+    """The merged expert weight W + delta (all experts) is built once per experts forward,
+    not once per hit expert (smoke job 11152482 OOM), and gradients are unchanged."""
+    from peft.tuners.lora import layer as lora_layer
+    from transformers import GptOssConfig, GptOssForCausalLM
+
+    import lean_rl.trainer as trainer_mod
+
+    torch.manual_seed(0)
+    GptOssForCausalLM(GptOssConfig(
+        hidden_size=64, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+        num_key_value_heads=2, head_dim=16, vocab_size=64, num_local_experts=8,
+        num_experts_per_tok=4, layer_types=["full_attention", "sliding_attention"],
+    )).save_pretrained(d := str(tmp_path / "gpt_oss"))
+
+    calls = []
+    real = lora_layer._LoraParameterProxy.forward
+    monkeypatch.setattr(lora_layer._LoraParameterProxy, "forward",
+                        lambda self, W: calls.append(1) or real(self, W))
+
+    def grads(cache: bool):
+        if not cache:
+            monkeypatch.setattr(trainer_mod, "cache_expert_parametrizations", lambda m: 0)
+        tr = _trainer(d)
+        _perturb_lora_b(tr.model)
+        calls.clear()
+        tr._forward_backward(_make_data(), "importance_sampling")
+        return len(calls), {n: p.grad.clone() for n, p in tr.model.named_parameters()
+                            if p.requires_grad and "experts" in n}
+
+    n_cached, g_cached = grads(True)
+    n_plain, g_plain = grads(False)
+    # 2 layers x 2 expert params x (forward + checkpoint recompute), per micro-batch group
+    assert n_cached <= 8 * len(_make_data()), n_cached
+    assert n_plain > n_cached  # uncached: once per hit expert
+    for k in g_plain:
+        torch.testing.assert_close(g_cached[k], g_plain[k])
+
+
 def test_save_adapter_has_only_lora_keys(tiny_model_dir, tmp_path):
     from safetensors import safe_open
 

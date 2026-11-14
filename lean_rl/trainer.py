@@ -62,7 +62,12 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from lean_rl import dist as ldist
 from lean_rl.losses import token_sum_loss
-from lean_rl.lora import log_parity_warnings, lora_placement, make_lora_config
+from lean_rl.lora import (
+    cache_expert_parametrizations,
+    log_parity_warnings,
+    lora_placement,
+    make_lora_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +252,8 @@ class Trainer:
         log_parity_warnings(placement, model_type)
         self.placement = placement
         self.model = get_peft_model(base, make_lora_config(placement, rank))
+        if placement.target_parameters:
+            cache_expert_parametrizations(self.model)
         # Dropout is 0, so train/eval only toggles HF gradient checkpointing; train mode is
         # entered just for the grad-enabled forward in _forward_backward.
         self.model.eval()

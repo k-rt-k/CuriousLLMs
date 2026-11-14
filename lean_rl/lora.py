@@ -104,3 +104,31 @@ def make_lora_config(placement: LoraPlacement, rank: int) -> LoraConfig:
 def log_parity_warnings(placement: LoraPlacement, model_type: str) -> None:
     for m in placement.mismatches:
         logger.warning("WARNING [tinker-parity] (%s) %s", model_type, m)
+
+
+def cache_expert_parametrizations(model: nn.Module) -> int:
+    """Build each LoRA-merged expert weight once per experts forward. Returns modules patched.
+
+    PEFT applies ``target_parameters`` LoRA as a parametrization ``W + delta`` on the stacked
+    expert tensors; its own ``parametrize.cached()`` sits inside the parametrization, so it
+    caches nothing. HF's training path indexes ``self.gate_up_proj[expert_idx]`` once per hit
+    expert, so every access rebuilds the full (all-experts) merged tensor and autograd keeps
+    each one alive through the saved slice: up to num_experts x ~1.5 GB per gpt-oss-20b layer
+    (OOM on a 95 GB GPU at 4096-token micro-batches). Entering ``cached()`` around the experts
+    forward (it runs again in the gradient-checkpoint recompute) builds it once per call.
+    """
+    from torch.nn.utils import parametrize
+
+    n = 0
+    for m in model.modules():
+        if type(m).__name__ != "GptOssExperts":
+            continue
+        orig = m.forward
+
+        def forward(*args, _orig=orig, **kwargs):
+            with parametrize.cached():
+                return _orig(*args, **kwargs)
+
+        m.forward = forward
+        n += 1
+    return n

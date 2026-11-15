@@ -161,13 +161,13 @@ def _validate(cfg: LeanRLConfig) -> None:
     if cfg.use_rnd_curiosity and not os.path.exists(RND_EMBEDDINGS_FILE):
         raise FileNotFoundError(
             f"use_rnd_curiosity=True needs the precomputed RND embeddings {RND_EMBEDDINGS_FILE!r} "
-            f"(relative to {os.getcwd()}); copy them there or pass use_rnd_curiosity=False."
+            f"(relative to {os.getcwd()}); build them with `python compute_normalizer_embeddings.py` (1 GPU, a few minutes) or pass use_rnd_curiosity=False."
         )
 
 
 # ---------------------------------------------------------------------------- RND (rank 0)
 # Precomputed gte embeddings for the RND normaliser (relative to the repo root, as in
-# curiosity_train.py). Not in git: produced by the RND_experimentation notebooks.
+# curiosity_train.py). Not in git: built by compute_normalizer_embeddings.py.
 RND_EMBEDDINGS_FILE = "embeddings/embeddings_gte_10000.pkl"
 
 

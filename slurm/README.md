@@ -261,8 +261,8 @@ mkdir -p /home/ksnair/CuriousLLMs_logs   # once
 # Defaults need two inputs; the run stops at startup if either is missing:
 #  - GEMINI_API_KEY (reasoning judge) exported in the submitting shell (--export=ALL passes it on);
 #    else EXTRA_ARGS=use_reasoning_rewards=False
-#  - embeddings/embeddings_gte_10000.pkl in the repo root (RND normaliser; not in git, made by the
-#    RND_experimentation notebooks); else EXTRA_ARGS=use_rnd_curiosity=False
+#  - embeddings/embeddings_gte_10000.pkl in the repo root (RND normaliser; not in git; build it
+#    once with `python compute_normalizer_embeddings.py` on a GPU node); else EXTRA_ARGS=use_rnd_curiosity=False
 set -a; source .env; set +a
 
 # Qwen3-8B, 1 node, replicated trainer (vLLM on GPU 0, 7 trainer ranks) -- fits 48 GB cards
@@ -280,7 +280,7 @@ sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FS
 
 Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
 `GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `MAX_TOKENS` (2048), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
-`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (2400; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
+`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (2400; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `VLLM_ENV` (`clm`; micromamba env for the vLLM server only, the trainer always uses `clm`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
 `GPT_OSS_LM_HEAD` (1|0, default 1), `LOG_DIR`, `DRY_RUN` (1 prints the hostfile, per-rank `RANK`/`LOCAL_RANK`/GPU mapping and the srun/trainer commands). Passed through only when
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
 (RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` (default) with a gpt-oss model

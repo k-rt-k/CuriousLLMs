@@ -46,7 +46,7 @@
 #   sbatch --nodes=2 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 #
 # Env knobs: MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN
-# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC VLLM_STARTUP_TIMEOUT_S(2400) GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
+# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC VLLM_STARTUP_TIMEOUT_S(2400) VLLM_ENV(clm) GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
 # EXTRA_ARGS ("key=value ..." forwarded to lean_rl.train). Optional pass-through when set:
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
@@ -78,6 +78,7 @@ cd "$REPO_DIR"
 : "${GPT_OSS_LM_HEAD:=1}"  # Tinker parity (lm_head LoRA); needs lean_rl/vllm_plugin installed
 : "${MAX_TOKENS:=2048}"
 : "${VLLM_STARTUP_TIMEOUT_S:=2400}"  # cold /data weight reads on Babel can take >13 min
+: "${VLLM_ENV:=clm}"  # micromamba env for the vLLM server only (the trainer always uses clm)
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
 
@@ -152,7 +153,7 @@ if [[ "$1" != "--rank" ]]; then
     echo "[lean] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT VLLM_PORT=$VLLM_PORT"
     echo "[lean] vllm_urls=$VLLM_URLS (node 0 only)  GPUS_PER_NODE=$GPUS_PER_NODE VLLM_TP_SIZE=$VLLM_TP_SIZE"
     echo "[lean] fsdp=$FSDP gpt_oss_lm_head_plugin=$USE_LM_HEAD_PLUGIN LOG_DIR=$LOG_DIR"
-    echo "[lean] node 0: vLLM CUDA_VISIBLE_DEVICES=$VLLM_VISIBLE$([[ "$USE_LM_HEAD_PLUGIN" == 1 ]] && echo " VLLM_PLUGINS=lean_rl_gpt_oss_lm_head")"
+    echo "[lean] node 0: vLLM (env $VLLM_ENV) CUDA_VISIBLE_DEVICES=$VLLM_VISIBLE$([[ "$USE_LM_HEAD_PLUGIN" == 1 ]] && echo " VLLM_PLUGINS=lean_rl_gpt_oss_lm_head")"
     echo "[lean] trainer world size=$WORLD; hostfile $HOSTFILE:"
     printf '[lean]   %s\n' "${RANK_HOST[@]}"
     for (( r = 0; r < WORLD; r++ )); do
@@ -212,12 +213,12 @@ fi
 # ---- parent (node 0): vLLM, then srun the ranks ---------------------------
 # Checks the vllm.general_plugins entry point is registered (and importable); stderr kept so a
 # broken install is not misreported as missing. Not run under DRY_RUN.
-if [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! python -c "
+if [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! "$MAMBA_ROOT_PREFIX/envs/$VLLM_ENV/bin/python" -c "
 import importlib.metadata as md, sys
 eps = [e for e in md.entry_points(group='vllm.general_plugins') if e.name == 'lean_rl_gpt_oss_lm_head']
 sys.exit(0 if eps and eps[0].load() else 1)"; then
     echo "[lean] gpt-oss with GPT_OSS_LM_HEAD=1 (default) needs the vLLM lm_head plugin:" >&2
-    echo "[lean]   python -m pip install --no-deps -e lean_rl/vllm_plugin" >&2
+    echo "[lean]   (in env $VLLM_ENV) python -m pip install --no-deps -e lean_rl/vllm_plugin" >&2
     echo "[lean] or set GPT_OSS_LM_HEAD=0 to train without lm_head LoRA (documented Tinker mismatch)." >&2
     exit 1
 fi
@@ -225,6 +226,7 @@ mkdir -p "$LOG_DIR"
 echo "[lean] LOG_DIR=$LOG_DIR"
 
 (
+    [[ "$VLLM_ENV" != clm ]] && micromamba activate "$VLLM_ENV"
     export CUDA_VISIBLE_DEVICES="$VLLM_VISIBLE"
     export VLLM_PORT VLLM_TP_SIZE VLLM_GPU_MEM_FRAC MODEL_NAME LORA_RANK LOG_DIR VLLM_STARTUP_TIMEOUT_S
     [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && export VLLM_PLUGINS=lean_rl_gpt_oss_lm_head

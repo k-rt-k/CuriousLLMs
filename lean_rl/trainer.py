@@ -263,6 +263,10 @@ class Trainer:
         self._head = _LogpHead(self.model, self._decoder, self._lm_head, logprob_chunk_tokens)
 
         self._fsdp_modules: list[Any] = []
+        # Wait for the slowest load (FSDP: rank 0 reading + dequantizing the whole checkpoint,
+        # >15 min on cold NFS) on the CPU gloo group, not inside the first NCCL collective:
+        # a rank blocked that long in NCCL trips the heartbeat monitor (480 s) and aborts.
+        ldist.barrier()
         if fsdp:
             if dist.is_main:
                 full_sd = self._head.state_dict()  # references to rank 0's CPU tensors

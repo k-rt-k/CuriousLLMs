@@ -59,7 +59,7 @@ eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
 micromamba activate clm
 ```
 
-For **gpt-oss-20b** specifically, two manual env patches are required (DeepGEMM build + a triton-kernel `.contiguous()` fix). Both are documented at the top of `slurm/README.md` under "Manual env tweaks (gpt-oss / MoE LoRA)". They are env-local; re-apply if the env is recreated.
+`slurm/sbatch_lean.sh` runs the vLLM server in a separate env, `clm-vllm` (vLLM 0.33.0; see "vLLM server env" in `slurm/README.md`), while the trainer runs in `clm`. With `VLLM_ENV=clm` (vLLM 0.20.2), **gpt-oss-20b** additionally needs two manual env patches (DeepGEMM build + a triton-kernel `.contiguous()` fix), documented in `slurm/README.md` under "Manual env tweaks".
 
 ### Cache layout
 
@@ -325,7 +325,7 @@ sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FS
 
 Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
 `GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `MAX_TOKENS` (2048), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
-`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (2400; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `VLLM_ENV` (`clm`; micromamba env for the vLLM server only, the trainer always uses `clm`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
+`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (7200; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `VLLM_ENV` (`clm-vllm`, vLLM 0.33; micromamba env for the vLLM server only, the trainer always uses `clm`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
 `GPT_OSS_LM_HEAD` (1|0, default 1), `LOG_DIR`, `DRY_RUN` (1 prints the hostfile, per-rank `RANK`/`LOCAL_RANK`/GPU mapping and the srun/trainer commands). Passed through only when
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
 (RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` (default) with a gpt-oss model
@@ -432,8 +432,8 @@ python math_evaluation.py \
 | `ValueError: Both load_checkpoint_path and init_from_adapter are set` | Both flags passed | Pick one (see "Adapter init priority" above) |
 | `RuntimeError: No usable rows in <dataset>` | All rows dropped (empty / too long / tokenizer-misaligned) | Check `problem_column`/`solution_column`, raise `max_seq_len`, try a different `model_name` (chat template matters) |
 | `vllm.log`: `HarmonyError: error downloading or loading vocab file ... /tmp/tiktoken-rs-cache ... Permission denied` (gpt-oss) | Another user owns the default harmony cache dir on that node | The sbatch scripts set a per-user `TIKTOKEN_RS_CACHE_DIR`; export it yourself when launching vLLM by hand |
-| `vllm.log` shows `DeepGEMM backend is not available` | gpt-oss path on a fresh env | Apply the DeepGEMM build patch in `slurm/README.md` |
-| `AssertionError: inputs.is_contiguous()` in `lora_shrink_op.py` | gpt-oss LoRA on un-patched vLLM | Apply the `.contiguous()` patch in `slurm/README.md` |
+| `vllm.log` shows `DeepGEMM backend is not available` | gpt-oss path with `VLLM_ENV=clm` on a fresh env | Apply the DeepGEMM build patch in `slurm/README.md` |
+| `AssertionError: inputs.is_contiguous()` in `lora_shrink_op.py` | gpt-oss LoRA with `VLLM_ENV=clm`, un-patched vLLM 0.20.2 | Apply the `.contiguous()` patch in `slurm/README.md` |
 | GptOss complains "sdpa not supported" | Default attn is sdpa | sbatch scripts already export `LOCAL_ATTN_IMPL=eager`; set it if running interactively |
 | Trainer OOM during forward | vLLM + trainer fighting for memory | Lower `VLLM_GPU_MEM_FRAC` or set `LOCAL_TRAINER_GPU_MEM_FRAC` env var (sets `torch.cuda.set_per_process_memory_fraction`) |
 | `metrics.jsonl` shows `loss=0` for most batches | Group-centered advantages: every group's reward is uniform | This is expected when rewards don't differentiate within a group (e.g. all-correct or all-wrong). Surface the unmasked loss via `EXTRA_ARGS="remove_constant_reward_groups=False"` to keep gradient signal from uniform groups |

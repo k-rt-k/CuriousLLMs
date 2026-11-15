@@ -46,7 +46,7 @@
 #   sbatch --nodes=2 --export=ALL,MODEL_NAME=Qwen/Qwen3-8B slurm/sbatch_lean.sh
 #
 # Env knobs: MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN
-# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC VLLM_STARTUP_TIMEOUT_S(2400) VLLM_ENV(clm) GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
+# MAX_TOKENS(2048) VLLM_TP_SIZE VLLM_GPU_MEM_FRAC VLLM_STARTUP_TIMEOUT_S(7200) VLLM_ENV(clm-vllm) GPUS_PER_NODE FSDP(0|1) GPT_OSS_LM_HEAD(1|0, default 1) LOG_DIR
 # EXTRA_ARGS ("key=value ..." forwarded to lean_rl.train). Optional pass-through when set:
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
@@ -77,8 +77,8 @@ cd "$REPO_DIR"
 : "${FSDP:=0}"
 : "${GPT_OSS_LM_HEAD:=1}"  # Tinker parity (lm_head LoRA); needs lean_rl/vllm_plugin installed
 : "${MAX_TOKENS:=2048}"
-: "${VLLM_STARTUP_TIMEOUT_S:=2400}"  # cold /data weight reads on Babel can take >13 min
-: "${VLLM_ENV:=clm}"  # micromamba env for the vLLM server only (the trainer always uses clm)
+: "${VLLM_STARTUP_TIMEOUT_S:=7200}"  # cold imports + /data weight reads on Babel have taken >40 min
+: "${VLLM_ENV:=clm-vllm}"  # micromamba env for the vLLM server only (vLLM 0.33; the trainer always uses clm)
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
 

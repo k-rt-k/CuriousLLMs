@@ -27,9 +27,28 @@ The rest of `tinker_cookbook` (envs, renderers, RL types, rollouts, data
 processing, KL/PPO metrics, evaluator base class, checkpoint_utils) is reused
 unchanged via the git submodule.
 
-## Manual env tweaks (gpt-oss / MoE LoRA)
+## vLLM server env (`clm-vllm`)
 
-Two changes were applied to the `clm` micromamba env to make `openai/gpt-oss-20b`
+`sbatch_lean.sh` runs the vLLM server in its own env, `clm-vllm` (vLLM 0.33.0, torch
+2.14 / CUDA 13), selected by `VLLM_ENV`; the trainer always runs in `clm`. vLLM 0.33
+serves gpt-oss LoRA (fused MoE LoRA, Marlin MXFP4) without the DeepGEMM and
+`lora_shrink_op` patches below and without the illegal-memory-access crash that 0.20.2
+hit on large evals. Rebuild it with:
+
+```bash
+micromamba create -y -n clm-vllm -c conda-forge python=3.11 pip
+micromamba activate clm-vllm
+python -m pip install vllm==0.33.0
+python -m pip install --no-deps -e lean_rl/vllm_plugin   # gpt-oss lm_head plugin, section 3
+```
+
+The first start on a node can take over 40 minutes (cold imports from NFS), hence the
+`VLLM_STARTUP_TIMEOUT_S=7200` default. `VLLM_ENV=clm` falls back to vLLM 0.20.2 in the
+trainer env, which needs sections 1-2.
+
+## Manual env tweaks (`clm`, vLLM 0.20.2; gpt-oss / MoE LoRA)
+
+Sections 1-2 apply only when serving from `clm` (`VLLM_ENV=clm`). Two changes were applied to the `clm` micromamba env to make `openai/gpt-oss-20b`
 LoRA training work end-to-end on vLLM 0.20.2. **Both are env-local, not in this
 repo.** If you recreate the env, re-apply both. A third one (section 3) is needed for
 gpt-oss `lm_head` LoRA, which `slurm/sbatch_lean.sh` enables by default for gpt-oss.
@@ -280,7 +299,7 @@ sbatch --nodes=2 --gres=gpu:L40S:8 --export=ALL,MODEL_NAME=openai/gpt-oss-20b,FS
 
 Knobs (environment, via `--export=ALL,...`): `MODEL_NAME` (default `Qwen/Qwen3-8B`), `LORA_RANK` (32), `GROUP_SIZE` (16),
 `GROUPS_PER_BATCH` (128), `LEARNING_RATE` (7e-5), `MAX_TOKENS` (2048), `ENV` (`mixed`), `LOSS_FN` (`ppo`), `VLLM_TP_SIZE` (1),
-`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (2400; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `VLLM_ENV` (`clm`; micromamba env for the vLLM server only, the trainer always uses `clm`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
+`VLLM_GPU_MEM_FRAC` (0.85), `VLLM_STARTUP_TIMEOUT_S` (7200; seconds to wait for vLLM, sized for slow cold weight reads from `/data`), `VLLM_ENV` (`clm-vllm`, vLLM 0.33; micromamba env for the vLLM server only, the trainer always uses `clm`), `GPUS_PER_NODE` (default `$SLURM_GPUS_ON_NODE`, else 8), `FSDP` (0|1, adds `fsdp=True`; do not also put `fsdp=` in `EXTRA_ARGS`),
 `GPT_OSS_LM_HEAD` (1|0, default 1), `LOG_DIR`, `DRY_RUN` (1 prints the hostfile, per-rank `RANK`/`LOCAL_RANK`/GPU mapping and the srun/trainer commands). Passed through only when
 set: `MICRO_BATCH_TOKENS`, `NUM_BATCHES`, `SAVE_EVERY`, `KEEP_CHECKPOINTS`, `EVAL_EVERY`, `INIT_FROM_ADAPTER`. Anything else
 (RND, judge, KL, entropy fields) goes in `EXTRA_ARGS="key=value ..."`. `GPT_OSS_LM_HEAD=1` (default) with a gpt-oss model

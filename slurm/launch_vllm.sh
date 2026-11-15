@@ -55,10 +55,10 @@ echo "[launch_vllm] starting vLLM model=$MODEL_NAME port=$VLLM_PORT gpu_mem=$VLL
 # Required for /v1/{load,unload}_lora_adapter to be served (vLLM 0.15+).
 export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 
-# vLLM 0.20+ defaults to DeepGEMM for MoE FP8 paths (e.g. gpt-oss). DeepGEMM
-# (deepseek-ai/DeepGEMM) is installed in the `clm` env — see slurm/README.md
-# section "Manual env tweaks". To force the pure-PyTorch / Marlin fallback,
-# set VLLM_USE_DEEP_GEMM=0 and VLLM_MOE_USE_DEEP_GEMM=0 before sbatch.
+# On vLLM 0.20.2 (`clm` env) gpt-oss needs DeepGEMM, installed in `clm` — see
+# slurm/README.md "Manual env tweaks". The default server env `clm-vllm` (vLLM 0.33)
+# needs no patches. To force the Marlin fallback on 0.20.2, set VLLM_USE_DEEP_GEMM=0
+# and VLLM_MOE_USE_DEEP_GEMM=0 before sbatch.
 # --generation-config vllm: ignore the model's generation_config.json sampling defaults
 # (Qwen3 ships temperature 0.6 / top_k 20 / top_p 0.95); RL sampling must use exactly the
 # request's parameters, as Tinker does.
@@ -90,7 +90,7 @@ cleanup_vllm() {
 trap cleanup_vllm EXIT INT TERM
 
 # Cold reads from /data are slow on Babel (Qwen3-8B weights took 801 s), so the default is 40 min.
-: "${VLLM_STARTUP_TIMEOUT_S:=2400}"
+: "${VLLM_STARTUP_TIMEOUT_S:=7200}"
 echo "[launch_vllm] waiting for vLLM at $VLLM_URL/health (timeout ${VLLM_STARTUP_TIMEOUT_S}s) ..."
 attempts=0
 until curl -sf "$VLLM_URL/health" > /dev/null; do

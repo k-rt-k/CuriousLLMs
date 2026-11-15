@@ -40,6 +40,12 @@ micromamba create -y -n clm-vllm -c conda-forge python=3.11 pip
 micromamba activate clm-vllm
 python -m pip install vllm==0.33.0
 python -m pip install --no-deps -e lean_rl/vllm_plugin   # gpt-oss lm_head plugin, section 3
+# FlashInfer JIT-compiles kernels on first use and most nodes have no system nvcc, so the env
+# carries its own CUDA 13.0 toolkit; sbatch_lean.sh points CUDA_HOME at it. Its nvcc/nvvm must
+# match the 13.0 runtime headers (13.5 fails with "Unsupported .version 9.5"):
+python -m pip install "nvidia-cuda-nvcc==13.0.*" "nvidia-cuda-crt==13.0.*" "nvidia-nvvm==13.0.*"
+CU=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cu13
+ln -s libcudart.so.13 $CU/lib/libcudart.so && ln -s lib $CU/lib64   # FlashInfer links -L$CUDA_HOME/lib64 -lcudart
 ```
 
 The first start on a node can take over 40 minutes (cold imports from NFS), hence the

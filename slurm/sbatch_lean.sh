@@ -227,6 +227,11 @@ echo "[lean] LOG_DIR=$LOG_DIR"
 
 (
     [[ "$VLLM_ENV" != clm ]] && micromamba activate "$VLLM_ENV"
+    # FlashInfer JIT-compiles kernels (sampling, gpt-oss attention) and many Babel nodes have
+    # no /usr/local/cuda/bin/nvcc: use the env's pip CUDA toolkit (see slurm/README.md).
+    for d in "$CONDA_PREFIX"/lib/python3.*/site-packages/nvidia/cu13; do
+        [[ -x "$d/bin/nvcc" ]] && export CUDA_HOME="$d"
+    done
     export CUDA_VISIBLE_DEVICES="$VLLM_VISIBLE"
     export VLLM_PORT VLLM_TP_SIZE VLLM_GPU_MEM_FRAC MODEL_NAME LORA_RANK LOG_DIR VLLM_STARTUP_TIMEOUT_S
     [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && export VLLM_PLUGINS=lean_rl_gpt_oss_lm_head

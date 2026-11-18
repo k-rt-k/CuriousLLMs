@@ -77,6 +77,11 @@ def init_dist() -> DistInfo | None:
         if torch.cuda.is_available():
             # Backstop for the abort watchdog: NCCL errors/timeouts tear the process down.
             os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+            # The NCCL heartbeat monitor (default 480 s) aborts ranks whose watchdog thread
+            # stalls, and it has fired while ranks 1..N waited for rank 0's >15 min cold FSDP
+            # load (job 11196098), even with that wait on the gloo group. Hangs are already
+            # bounded by the collective timeout and the abort watchdog: align the two.
+            os.environ.setdefault("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", str(int(timeout.total_seconds())))
             torch.cuda.set_device(local_rank)
             # device_id binds NCCL to the physical GPU (barrier etc. would otherwise guess
             # cuda:{rank}, which is wrong when node 0 skips the vLLM GPUs).

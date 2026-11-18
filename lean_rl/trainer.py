@@ -265,7 +265,8 @@ class Trainer:
         self._fsdp_modules: list[Any] = []
         # Wait for the slowest load (FSDP: rank 0 reading + dequantizing the whole checkpoint,
         # >15 min on cold NFS) on the CPU gloo group, not inside the first NCCL collective:
-        # a rank blocked that long in NCCL trips the heartbeat monitor (480 s) and aborts.
+        # a rank blocked that long in NCCL hits the NCCL watchdog (see also the heartbeat
+        # timeout set in lean_rl.dist.init_dist).
         ldist.barrier()
         if fsdp:
             if dist.is_main:

@@ -276,7 +276,7 @@ alpha 32 on attention + MLP/experts + `lm_head`). The older `local_backend/` pat
 `sbatch_train*.sh`) still exists and is unchanged; use `slurm/sbatch_lean.sh` for the new trainer.
 
 Topology: node 0 runs the only vLLM on GPUs `0..VLLM_TP_SIZE-1`; trainer ranks take the remaining GPUs of node 0 and all
-GPUs of every other node (no `torchrun`: one `srun` task per trainer rank via `SLURM_HOSTFILE` + `--distribution=arbitrary`; each task exports
+GPUs of every other node (no `torchrun`: on one node each trainer rank is a child process of the batch script; across nodes, one `srun` task per rank via `SLURM_HOSTFILE` + `--distribution=arbitrary`; each rank exports
 `RANK`/`WORLD_SIZE`/`LOCAL_RANK`/`MASTER_ADDR`/`MASTER_PORT` and execs `python -m lean_rl.train`; `LOCAL_RANK` is the physical GPU
 index and all node GPUs stay visible). KL/reference logprobs are computed in the trainer. Preemption: every rank receives
 Slurm's SIGTERM directly; the ranks agree on it during rollouts/evals, after the KL logprobs and between `train_step` micro-batches, abandon the in-progress step (no optimizer step; a vLLM call failing because vLLM was SIGTERMed too counts as preemption), save the last completed step and exit 0; the launcher then stops vLLM. A requeued job resumes from the same `LOG_DIR` (`/data/hf_cache/ksnair/CuriousLLMs_logs/<jobid>-<model>`): rank 0 deletes stale `ckpt/step_*.tmp` dirs and picks the newest checkpoint that loads, falling back to an older one; every rank restores that path. An unhandled failure on any rank now aborts all ranks within seconds (abort key in rank 0's c10d store + a per-rank watchdog thread; exit 1) instead of leaving them blocked until the dist timeout.
@@ -313,8 +313,10 @@ sets `VLLM_PLUGINS=lean_rl_gpt_oss_lm_head` for vLLM and `gpt_oss_lm_head=True` 
 startup (not under `DRY_RUN`) if the plugin is not installed; the attention implementation is chosen automatically by the
 trainer (eager for gpt-oss, sdpa otherwise); override with `EXTRA_ARGS="attn_implementation=..."`.
 `preempt_qos` caps a user at 24 GPUs, so keep `--nodes` x GPUs per node under that. On preemption (GraceTime 0,
-KillWait 120 s) each rank is a Slurm task and gets SIGTERM directly (no torchelastic, which would SIGKILL ranks after
-~30 s); the batch shell waits up to 100 s for the step, then stops vLLM, all inside the 120 s budget.
+KillWait 120 s) each rank gets SIGTERM directly (no torchelastic, which would SIGKILL ranks after
+~30 s); the batch shell waits up to 100 s for the ranks, then stops vLLM, all inside the 120 s budget. Single node
+only: `srun` answers SIGTERM by SIGKILLing its tasks, so a preempted multi-node job cannot save and resumes from its
+last periodic checkpoint (`SAVE_EVERY`).
 
 GPU sizing (design targets; GPU smoke runs of each row are pending):
 

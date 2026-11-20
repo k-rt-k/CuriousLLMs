@@ -51,11 +51,14 @@
 # MICRO_BATCH_TOKENS NUM_BATCHES SAVE_EVERY KEEP_CHECKPOINTS EVAL_EVERY INIT_FROM_ADAPTER.
 #
 # Preemption (Babel: GraceTime=0, KillWait=120 s, so the whole shutdown must fit in 120 s):
-# every trainer rank is a Slurm task (python exec'd directly, no torchelastic), so it gets
-# Slurm's SIGTERM itself; the trainer's PreemptionFlag (SIGTERM/SIGUSR1) saves the last
-# completed step and exits 0. The batch shell on TERM forwards it to srun, waits <= 100 s for
-# the step to exit, then stops vLLM and exits with the step's rc. A requeued job (same
-# SLURM_JOB_ID) reuses LOG_DIR and resumes.
+# every trainer rank is python exec'd directly (no torchelastic), so it gets Slurm's SIGTERM
+# itself; the trainer's PreemptionFlag (SIGTERM/SIGUSR1) saves the last completed step and
+# exits 0. On ONE node the ranks are children of this shell, not srun tasks: srun answers its
+# own SIGTERM by SIGKILLing its tasks ("srun: forcing job termination"), which killed the ranks
+# before they could save (job 11200771). The batch shell on TERM waits <= 100 s for the ranks,
+# then stops vLLM and exits with the worst rank rc. Multi-node runs still need srun, so a
+# preempted multi-node job loses the steps since its last periodic checkpoint (SAVE_EVERY).
+# A requeued job (same SLURM_JOB_ID) reuses LOG_DIR and resumes.
 #
 # DRY_RUN=1 prints the hostfile, per-rank RANK/LOCAL_RANK/GPU mapping and commands; launches nothing.
 
@@ -165,7 +168,11 @@ if [[ "$1" != "--rank" ]]; then
         --gres=gpu:"$GPUS_PER_NODE" --gpu-bind=none --cpus-per-task="$CPUS_PER_RANK"
         zsh "$REPO_DIR/slurm/sbatch_lean.sh" --rank)
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo "[lean] DRY_RUN SLURM_HOSTFILE=$HOSTFILE srun: ${SRUN_CMD[*]}"
+        if (( NNODES == 1 )); then
+            echo "[lean] DRY_RUN single node: $WORLD local rank processes: zsh $REPO_DIR/slurm/sbatch_lean.sh --rank"
+        else
+            echo "[lean] DRY_RUN SLURM_HOSTFILE=$HOSTFILE srun: ${SRUN_CMD[*]}"
+        fi
         exit 0
     fi
 fi
@@ -193,15 +200,15 @@ mkdir -p "$TRITON_CACHE_DIR"
 export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-/data/hf_cache/${USER}/tiktoken-rs}"
 mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 
-# ---- rank: one srun task per trainer rank ----------------------------------
+# ---- rank: one process per trainer rank (local child on 1 node, srun task otherwise) ----
 if [[ "$1" == "--rank" ]]; then
     if [[ "$(hostname -s)" == "${HOSTS[1]}" ]]; then
         first=$VLLM_TP_SIZE; LOCAL_WORLD_SIZE=$TRAINER_GPUS_NODE0
     else
         first=0; LOCAL_WORLD_SIZE=$GPUS_PER_NODE
     fi
-    export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS
-    export LOCAL_RANK=$(( first + SLURM_LOCALID )) LOCAL_WORLD_SIZE
+    export RANK=${LEAN_RANK:-$SLURM_PROCID} WORLD_SIZE=${LEAN_WORLD:-$SLURM_NTASKS}
+    export LOCAL_RANK=$(( first + ${LEAN_LOCALID:-$SLURM_LOCALID} )) LOCAL_WORLD_SIZE
     export MASTER_ADDR MASTER_PORT
     export CUDA_VISIBLE_DEVICES=${(j:,:)${(f)"$(seq 0 $((GPUS_PER_NODE-1)))"}}
     build_trainer_args
@@ -245,12 +252,32 @@ stop_vllm() {
 }
 trap stop_vllm EXIT INT
 
-# Preemption: ranks get Slurm's SIGTERM themselves (save + exit 0); also forward TERM to srun,
-# wait <= 100 s for the step, then stop vLLM.
+# Preemption: ranks get Slurm's SIGTERM themselves (save + exit 0). Single node: TERM them again
+# (harmless; covers a TERM sent to this shell alone), wait <= 100 s, then stop vLLM. Multi-node:
+# forward TERM to srun (which SIGKILLs its tasks; see "Preemption" above).
+RANK_PIDS=()
+any_rank_alive() {
+    local p
+    for p in "${RANK_PIDS[@]}"; do kill -0 "$p" 2>/dev/null && return 0; done
+    return 1
+}
 on_term() {
     set +e  # errexit must not abort the handler (wait returns 143 after the kill)
-    echo "[lean] SIGTERM (preempted?) - forwarding to the trainer step, then stopping vLLM" >&2
-    if [[ -n "$SRUN_PID" ]]; then
+    echo "[lean] SIGTERM (preempted?) - waiting for the trainer ranks, then stopping vLLM" >&2
+    if (( ${#RANK_PIDS} )); then
+        kill -TERM "${RANK_PIDS[@]}" 2>/dev/null
+        local i p s
+        for (( i = 0; i < 100; i++ )); do   # KillWait is 120 s; leave room to stop vLLM
+            any_rank_alive || break
+            sleep 1
+        done
+        kill -KILL "${RANK_PIDS[@]}" 2>/dev/null
+        rc=0
+        for p in "${RANK_PIDS[@]}"; do
+            wait "$p" 2>/dev/null; s=$?
+            (( s != 0 && rc == 0 )) && rc=$s
+        done
+    elif [[ -n "$SRUN_PID" ]]; then
         kill -TERM "$SRUN_PID" 2>/dev/null
         local i
         for (( i = 0; i < 100; i++ )); do   # KillWait is 120 s; leave room to stop vLLM
@@ -289,6 +316,43 @@ echo "[lean] vLLM ready"
 export MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN VLLM_TP_SIZE
 export MAX_TOKENS GPUS_PER_NODE FSDP GPT_OSS_LM_HEAD EXTRA_ARGS USE_LM_HEAD_PLUGIN TRAINER_GPUS_NODE0
 export MASTER_ADDR MASTER_PORT VLLM_PORT VLLM_URLS LOG_DIR REPO_DIR
+if (( NNODES == 1 )); then
+    # Local children (see "Preemption" above). Each rank's PID is python's (the --rank branch
+    # execs it). Like srun --kill-on-bad-exit: once a rank fails, TERM the rest, KILL after 60 s.
+    for (( r = 0; r < WORLD; r++ )); do
+        LEAN_RANK=$r LEAN_WORLD=$WORLD LEAN_LOCALID=$r zsh "$REPO_DIR/slurm/sbatch_lean.sh" --rank &
+        RANK_PIDS+=($!)
+    done
+    rc=0
+    pending=("${RANK_PIDS[@]}")
+    while (( ${#pending} )); do
+        still=()
+        for p in "${pending[@]}"; do
+            if kill -0 "$p" 2>/dev/null; then
+                still+=($p)
+            else
+                s=0; wait "$p" || s=$?
+                (( s != 0 && rc == 0 )) && rc=$s
+            fi
+        done
+        pending=("${still[@]}")
+        if (( rc != 0 && ${#pending} )); then
+            echo "[lean] a trainer rank exited with rc=$rc; stopping the others" >&2
+            kill -TERM "${pending[@]}" 2>/dev/null || true   # some may have exited already
+            for (( i = 0; i < 60; i++ )); do
+                any_rank_alive || break
+                sleep 1
+            done
+            kill -KILL "${pending[@]}" 2>/dev/null || true
+            for p in "${pending[@]}"; do wait "$p" 2>/dev/null || true; done
+            break
+        fi
+        (( ${#pending} )) && sleep 5
+    done
+    stop_vllm
+    exit $rc
+fi
+
 printf '%s\n' "${RANK_HOST[@]}" > "$HOSTFILE"
 export SLURM_HOSTFILE="$HOSTFILE"
 # sbatch's header exports these job-level values, which srun reads as INPUT defaults and which

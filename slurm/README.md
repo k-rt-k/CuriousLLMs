@@ -133,8 +133,11 @@ git submodule update --init --recursive
 ## Submitting jobs
 
 All scripts run on the preemptible partition (`--partition=preempt --qos=preempt_qos --requeue
---open-mode=append`). SLURM opens the `#SBATCH --output` file before the script runs, so create its
-directory once before the first `sbatch`:
+--open-mode=append`) and skip known-bad nodes (`#SBATCH
+--exclude=babel-l9-32,babel-p9-20,babel-o5-16,babel-o5-32`; the o5 L40S nodes hung in the first
+FSDP broadcast, job 11219252). A command-line `--exclude` replaces that list rather than adding to
+it, so repeat these nodes when you pass your own. SLURM opens the `#SBATCH --output` file before the
+script runs, so create its directory once before the first `sbatch`:
 
 ```bash
 mkdir -p /home/ksnair/CuriousLLMs_logs

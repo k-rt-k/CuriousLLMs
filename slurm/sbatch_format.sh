@@ -4,6 +4,7 @@
 #SBATCH --qos=preempt_qos
 #SBATCH --requeue
 #SBATCH --open-mode=append
+#SBATCH --exclude=babel-l9-32,babel-p9-20,babel-o5-16,babel-o5-32
 #SBATCH --gres=gpu:L40S:1
 #SBATCH --mem=64G
 #SBATCH --time=8:00:00

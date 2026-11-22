@@ -350,6 +350,49 @@ Documented mismatches with Tinker (also logged at trainer startup):
   started with `--generation-config vllm` and every sampling request sends `top_k`, so a model's `generation_config.json`
   (Qwen3 ships `top_k=20`, `top_p=0.95`, temperature 0.6) never truncates RL samples.
 
+## Modal
+
+`modal_jobs/app.py` runs the same `slurm/sbatch_*.sh` scripts on Modal. Everything that differs from Babel
+lives in `slurm/platform.sh` (`CLLM_PLATFORM=babel|modal`): Python envs (micromamba on Babel, venvs
+`/opt/envs/clm` and `/opt/envs/clm-vllm` in the image, pinned to Babel's envs by
+`modal_jobs/requirements-*.txt`), HF caches, the `LOG_DIR` root, node hosts and preemption signals.
+
+One-time setup (Modal client >= 1.4 in your local env):
+
+```bash
+# Secrets the jobs read (GEMINI_API_KEY for the reasoning judge, WANDB_API_KEY, TINKER_API_KEY):
+modal secret create cllm-env --from-dotenv path/to/.env
+# RND normaliser on the data volume (cllm-data, v2, mounted at /vol):
+modal volume create cllm-data --version=2
+modal volume put cllm-data embeddings/embeddings_gte_10000.pkl /embeddings/embeddings_gte_10000.pkl
+# Optional: build the image and check both envs (CPU only, no secrets needed)
+CLLM_MODAL_SECRETS= modal run modal_jobs/app.py::check_image
+```
+
+Running (one `--script` per `slurm/sbatch_<script>.sh`; `--vars` are what `sbatch --export` would pass):
+
+```bash
+CLLM_MODAL_GPU=L40S:4 modal run --detach modal_jobs/app.py --script lean \
+    --vars "MODEL_NAME=Qwen/Qwen3-8B NUM_BATCHES=3 EVAL_EVERY=0"
+CLLM_MODAL_GPU=L40S:4 modal run --detach modal_jobs/app.py --script lean \
+    --vars "MODEL_NAME=openai/gpt-oss-20b FSDP=1"
+CLLM_MODAL_GPU=L40S:1 modal run --detach modal_jobs/app.py --script eval --vars "MODEL_NAME=... MODEL_PATH=..."
+# multi-node (Modal cluster; full nodes only, RDMA on H100-class GPUs): lean and train_dist
+CLLM_MODAL_GPU=H100:8 CLLM_MODAL_NODES=2 CLLM_MODAL_RDMA=1 modal run --detach modal_jobs/app.py --script lean ...
+```
+
+- `--run-id` sets `JOB_ID` (default `<script>-<UTC timestamp>`); `LOG_DIR` is `/vol/logs/<run-id>-<model>`, the
+  job log `/vol/logs/<run-id>.node<N>.out`. Pass an earlier run id to resume that run.
+- Preemption: Modal sends an interrupt and kills the container 30 s later, then reruns the call with the same
+  run id, which resumes from `LOG_DIR`. The scripts treat the interrupt like Babel's SIGTERM; the lean trainer
+  saves its last completed step if it can within the window (`PREEMPT_WAIT_S=25`), else resumes from its last
+  periodic checkpoint (`SAVE_EVERY`). Multi-node lean ranks are children of each node's script (no `srun`), so
+  they get the signal too. Runs past 24 h continue through `CLLM_MODAL_RETRIES` (default 2) retries.
+- Gated models (e.g. the legacy scripts' default `meta-llama/Llama-3.2-3B`) need an `HF_TOKEN` secret:
+  `CLLM_MODAL_SECRETS=cllm-env,huggingface`.
+- The image mounts your local checkout (including uncommitted changes) at container start; `.git`, `.env`,
+  `logs/` and notebooks are left out.
+
 ## Memory rules of thumb
 
 | GPU | vLLM share | Trainer share | Comfortable model size |

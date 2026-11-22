@@ -27,24 +27,17 @@
 #   ENV                (default mixed)
 #   DATASET_SCHEDULE   (default m-m)
 #   LOSS_FN            (default ppo)
-#   LOG_DIR            (default auto-generated under /data/hf_cache/ksnair/CuriousLLMs_logs/)
+#   LOG_DIR            (default auto-generated under ${LOGS_ROOT}/)
 #   INIT_FROM_ADAPTER  (default unset; path to a LoRA adapter dir to warm-start from)
 #   EXTRA_ARGS         (passed verbatim to math_train.py)
 
 set -e
 
-# --- micromamba ----------------------------------------------------
-# clm env has vllm 0.15.1 + torch + peft + transformers already installed.
-export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
-export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
-eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate clm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+source "$REPO_DIR/slurm/platform.sh"   # Babel vs Modal paths, envs, signals
+cllm_activate clm
 
-# --- HF cache (shared, writable for hpcuser) -----------------------
-# Avoid /data/user_data/ksnair entirely — use the shared /data/hf_cache.
-export HF_HUB_CACHE=/data/hf_cache/hub
-export HF_DATASETS_CACHE=/data/hf_cache/datasets
-unset HF_HOME  # let HF default; HF_HUB_CACHE is the load-bearing one
+cllm_hf_cache shared
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
@@ -62,12 +55,12 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    if [[ -n "${SLURM_JOB_ID}" ]]; then
-        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same job id) resumes into the same LOG_DIR.
+        LOG_DIR=${LOGS_ROOT}/${JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
     else
         STAMP=$(date +%Y%m%d-%H%M%S)
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+        LOG_DIR=${LOGS_ROOT}/${STAMP}-${JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
     fi
 fi
 export LOG_DIR
@@ -75,20 +68,19 @@ mkdir -p "$LOG_DIR"
 echo "[train] LOG_DIR=$LOG_DIR"
 
 # --- vLLM ----------------------------------------------------------
-REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
 cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 # Node-local Triton cache for vLLM AND the trainer (~/.triton may point at a
 # /scratch dir missing on this node). Set here in the parent scope because
 # launch_vllm.sh (same default) may run in a subshell whose exports are lost.
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
 source slurm/launch_vllm.sh
 
 # --- training ------------------------------------------------------
 # Run in the background so a SLURM preemption (SIGTERM) can be forwarded to it
 # and to vLLM. The job is --requeue'd and resumes from LOG_DIR
-# (behavior_if_log_dir_exists=resume; LOG_DIR is stable per SLURM_JOB_ID).
+# (behavior_if_log_dir_exists=resume; LOG_DIR is stable per job id).
 on_term() {
     echo "[train] SIGTERM (preempted?) - forwarding to trainer and vLLM" >&2
     set +e  # errexit must not abort the handler (wait returns 143 after the kill)
@@ -97,7 +89,7 @@ on_term() {
     cleanup_vllm
     exit 143
 }
-trap on_term TERM
+cllm_trap_preempt on_term
 
 python math_train.py \
     backend=local \

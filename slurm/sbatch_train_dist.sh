@@ -34,6 +34,9 @@
 # dist_node.sh -> torchrun + vLLM). The requeued job reuses the same LOG_DIR
 # and resumes (behavior_if_log_dir_exists=resume).
 #
+# Modal (modal_jobs/app.py, CLLM_PLATFORM=modal): every node is one container that runs this
+# script; it execs slurm/dist_node.sh directly (no srun) with node index CLLM_NODE_RANK.
+#
 # DRY_RUN=1 prints the computed topology and the srun/torchrun command lines
 # without launching anything (used for CPU-side checks).
 
@@ -41,6 +44,7 @@ set -e
 
 REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
 cd "$REPO_DIR"
+source "$REPO_DIR/slurm/platform.sh"   # Babel vs Modal paths, envs, hosts, signals
 
 : "${MODEL_NAME:=meta-llama/Llama-3.2-3B}"
 : "${LORA_RANK:=32}"
@@ -52,12 +56,12 @@ cd "$REPO_DIR"
 : "${LOSS_FN:=ppo}"
 : "${VLLM_GPU_MEM_FRAC:=0.85}"  # vLLM has its own GPU(s) here
 : "${VLLM_TP_SIZE:=1}"
-: "${GPUS_PER_NODE:=${SLURM_GPUS_ON_NODE:-4}}"
+: "${GPUS_PER_NODE:=$(cllm_gpus_on_node)}"
+: "${GPUS_PER_NODE:=4}"
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
 
-: "${SLURM_JOB_ID:?SLURM_JOB_ID must be set (run under sbatch)}"
-: "${SLURM_JOB_NODELIST:?SLURM_JOB_NODELIST must be set (run under sbatch)}"
+: "${JOB_NUM:?no job id: run under sbatch (SLURM_JOB_ID) or via modal_jobs/app.py (JOB_ID)}"
 
 TRAINER_GPUS_PER_NODE=$(( GPUS_PER_NODE - VLLM_TP_SIZE ))
 if (( TRAINER_GPUS_PER_NODE < 1 )); then
@@ -65,18 +69,19 @@ if (( TRAINER_GPUS_PER_NODE < 1 )); then
     exit 1
 fi
 
-# Short hostnames resolve inside Babel; the same names serve MASTER_ADDR and VLLM_URLS.
-HOSTS=(${(f)"$(scontrol show hostnames "$SLURM_JOB_NODELIST")"})
+# Babel: short hostnames (they resolve inside Babel); Modal: container IPs. The same names serve
+# MASTER_ADDR and VLLM_URLS.
+HOSTS=(${(f)"$(cllm_hosts)"})
 NNODES=${#HOSTS[@]}
 MASTER_ADDR=${HOSTS[1]}
-MASTER_PORT=$(( 29500 + SLURM_JOB_ID % 1000 ))
-VLLM_PORT=$(( 20000 + SLURM_JOB_ID % 9000 ))
-URLS=(); for h in "${HOSTS[@]}"; do URLS+=("http://${h}:${VLLM_PORT}"); done
+MASTER_PORT=$(( 29500 + JOB_NUM % 1000 ))
+VLLM_PORT=$(( 20000 + JOB_NUM % 9000 ))
+URLS=(); for h in "${HOSTS[@]}"; do URLS+=("http://$(cllm_url_host "$h"):${VLLM_PORT}"); done
 VLLM_URLS=${(j:,:)URLS}
 
 if [[ -z "${LOG_DIR}" ]]; then
-    # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
-    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    # No timestamp: a requeued job (same job id) resumes into the same LOG_DIR.
+    LOG_DIR=${LOGS_ROOT}/${JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
 fi
 
 export MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV DATASET_SCHEDULE LOSS_FN
@@ -89,6 +94,10 @@ echo "[train-dist] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT VLLM_PORT=$
 echo "[train-dist] VLLM_URLS=$VLLM_URLS"
 echo "[train-dist] per node: GPUs=$GPUS_PER_NODE vLLM_tp=$VLLM_TP_SIZE trainer_ranks=$TRAINER_GPUS_PER_NODE"
 echo "[train-dist] LOG_DIR=$LOG_DIR"
+
+if [[ "$CLLM_PLATFORM" == modal ]]; then
+    exec zsh "$REPO_DIR/slurm/dist_node.sh"   # this container is node $CLLM_NODE_RANK
+fi
 
 SRUN_CMD=(srun --ntasks-per-node=1 --kill-on-bad-exit=1 zsh "$REPO_DIR/slurm/dist_node.sh")
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -106,7 +115,7 @@ on_term() {
     [[ -n "$SRUN_PID" ]] && wait "$SRUN_PID" 2>/dev/null
     exit 143
 }
-trap on_term TERM
+cllm_trap_preempt on_term
 
 "${SRUN_CMD[@]}" &
 SRUN_PID=$!

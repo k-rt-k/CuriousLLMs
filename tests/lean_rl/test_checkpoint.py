@@ -138,6 +138,26 @@ def test_preemption_flag_sets_on_signal():
             signal.signal(s, h)
 
 
+def test_preemption_flag_sigint_only_when_enabled(monkeypatch):
+    sigs = (*PreemptionFlag.SIGNALS, signal.SIGINT)
+    old = {s: signal.getsignal(s) for s in sigs}
+    try:
+        monkeypatch.delenv("LEAN_PREEMPT_ON_SIGINT", raising=False)
+        PreemptionFlag().install()
+        with pytest.raises(KeyboardInterrupt):
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(0.05)
+
+        monkeypatch.setenv("LEAN_PREEMPT_ON_SIGINT", "1")
+        flag = PreemptionFlag().install()
+        os.kill(os.getpid(), signal.SIGINT)
+        time.sleep(0.05)
+        assert flag.requested is True
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
+
+
 def _run(args):
     return subprocess.Popen([sys.executable, "-m", "tests.lean_rl.sigterm_loop", *args])
 

@@ -35,27 +35,18 @@
 #   NUM_STEPS        (default 500)
 #   LEARNING_RATE    (default 1e-4)
 #   SAVE_EVERY       (default 100)
-#   LOG_DIR          (default auto-generated under /data/hf_cache/ksnair/CuriousLLMs_logs/)
+#   LOG_DIR          (default auto-generated under ${LOGS_ROOT}/)
 #   EXTRA_ARGS       (passed verbatim to format_train.py)
 
 set -e
 
-# --- micromamba ----------------------------------------------------
-export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
-export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
-eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate clm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+source "$REPO_DIR/slurm/platform.sh"   # Babel vs Modal paths, envs, signals
+cllm_activate clm
 
-# --- HF cache (shared, writable for hpcuser) -----------------------
-# NOTE: /data/hf_cache/{hub,datasets} is the community-shared cache and is
-# NOT writable from compute nodes for our user — both HF datasets and HF Hub
-# acquire filelock-style locks on read which require write access. Force the
-# writable per-user paths here regardless of the inherited shell env (the
-# user's ~/.zshrc may set HF_DATASETS_CACHE to the shared path).
-unset HF_HOME
-export HF_HUB_CACHE=/data/hf_cache/ksnair/.hf_hub_cache
-export HF_DATASETS_CACHE=/data/hf_cache/ksnair/.hf_datasets_cache
-mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE"
+# /data/hf_cache/{hub,datasets} is not writable from compute nodes for our user (HF file
+# locks need write access): per-user caches on Babel (slurm/platform.sh).
+cllm_hf_cache user
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
@@ -76,12 +67,12 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    if [[ -n "${SLURM_JOB_ID}" ]]; then
-        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-format-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same job id) resumes into the same LOG_DIR.
+        LOG_DIR=${LOGS_ROOT}/${JOB_ID}-format-$(echo "$MODEL_NAME" | tr '/' '-')
     else
         STAMP=$(date +%Y%m%d-%H%M%S)
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-format-$(echo "$MODEL_NAME" | tr '/' '-')
+        LOG_DIR=${LOGS_ROOT}/${STAMP}-${JOB_ID:-local}-format-$(echo "$MODEL_NAME" | tr '/' '-')
     fi
 fi
 export LOG_DIR
@@ -91,13 +82,12 @@ echo "[format] LOG_DIR=$LOG_DIR"
 # --- vLLM ----------------------------------------------------------
 # We still launch vLLM for parity with sbatch_train.sh — it's idle during SFT
 # but lets format_final/ get hot-loaded for a final test sample if desired.
-REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
 cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 # Node-local Triton cache for vLLM AND the trainer (~/.triton may point at a
 # /scratch dir missing on this node). Set here in the parent scope because
 # launch_vllm.sh (same default) may run in a subshell whose exports are lost.
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
 source slurm/launch_vllm.sh
 

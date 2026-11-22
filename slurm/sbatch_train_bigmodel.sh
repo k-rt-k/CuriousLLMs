@@ -32,14 +32,11 @@
 
 set -e
 
-export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
-export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
-eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate clm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+source "$REPO_DIR/slurm/platform.sh"   # Babel vs Modal paths, envs, signals
+cllm_activate clm
 
-export HF_HUB_CACHE=/data/hf_cache/hub
-export HF_DATASETS_CACHE=/data/hf_cache/datasets
-unset HF_HOME
+cllm_hf_cache shared
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
@@ -57,12 +54,12 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    if [[ -n "${SLURM_JOB_ID}" ]]; then
-        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same job id) resumes into the same LOG_DIR.
+        LOG_DIR=${LOGS_ROOT}/${JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
     else
         STAMP=$(date +%Y%m%d-%H%M%S)
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+        LOG_DIR=${LOGS_ROOT}/${STAMP}-${JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
     fi
 fi
 export LOG_DIR
@@ -82,13 +79,12 @@ VLLM_VISIBLE=$(seq -s, 0 $((VLLM_TP_SIZE-1)))
 TRAINER_VISIBLE=$(seq -s, $VLLM_TP_SIZE $((VLLM_TP_SIZE+TRAINER_NUM_GPUS-1)))
 echo "[train-big] vLLM GPUs=$VLLM_VISIBLE  trainer GPUs=$TRAINER_VISIBLE"
 
-REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
 cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 # Node-local Triton cache for vLLM AND the trainer (~/.triton may point at a
 # /scratch dir missing on this node). Set here in the parent scope because
 # launch_vllm.sh (same default) may run in a subshell whose exports are lost.
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
 
 # --- vLLM in a subshell with restricted CUDA_VISIBLE_DEVICES -------
@@ -115,13 +111,13 @@ on_term() {
     exit 143
 }
 trap stop_vllm EXIT INT
-trap on_term TERM
+cllm_trap_preempt on_term
 
-# Wait for vLLM /health (the subshell's port is deterministic from SLURM_JOB_ID)
-if [[ -n "${SLURM_JOB_ID}" ]]; then
-    VLLM_PORT=$(( 20000 + (SLURM_JOB_ID % 9000) ))
+# Wait for vLLM /health (the subshell's port is deterministic from the job id)
+if [[ -n "${JOB_NUM}" ]]; then
+    VLLM_PORT=$(( 20000 + (JOB_NUM % 9000) ))
 else
-    echo "[train-big] no SLURM_JOB_ID — cannot derive VLLM_PORT deterministically" >&2
+    echo "[train-big] no job id (SLURM_JOB_ID / JOB_ID) — cannot derive VLLM_PORT deterministically" >&2
     exit 1
 fi
 export VLLM_URL="http://127.0.0.1:${VLLM_PORT}"

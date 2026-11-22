@@ -183,7 +183,11 @@ def restore_checkpoint(path: str, trainer: "Trainer", *, restore_rng: bool = Tru
 
 
 class PreemptionFlag:
-    """SIGTERM/SIGUSR1 set ``requested``; the loop saves at the next step boundary and exits 0."""
+    """SIGTERM/SIGUSR1 set ``requested``; the loop saves at the next step boundary and exits 0.
+
+    With ``LEAN_PREEMPT_ON_SIGINT=1`` (set by slurm/platform.sh on Modal, whose preemption
+    notice is an interrupt signal) SIGINT does the same instead of raising KeyboardInterrupt.
+    """
 
     SIGNALS = (signal.SIGTERM, signal.SIGUSR1)
 
@@ -193,7 +197,13 @@ class PreemptionFlag:
     def _handler(self, signum: int, frame: Any) -> None:
         self.requested = True
 
+    @classmethod
+    def signals(cls) -> tuple[int, ...]:
+        if os.environ.get("LEAN_PREEMPT_ON_SIGINT") == "1":
+            return (*cls.SIGNALS, signal.SIGINT)
+        return cls.SIGNALS
+
     def install(self) -> "PreemptionFlag":
-        for sig in self.SIGNALS:
+        for sig in self.signals():
             signal.signal(sig, self._handler)  # ValueError if not the main thread
         return self

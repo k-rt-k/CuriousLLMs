@@ -13,7 +13,7 @@
 #   LOG_DIR               (required; where vllm.log lives)
 #
 # Outputs (env):
-#   VLLM_URL              http://$(hostname -f):$VLLM_PORT  (server binds 0.0.0.0)
+#   VLLM_URL              http://<this node>:$VLLM_PORT (cllm_self_host; server binds 0.0.0.0)
 #   VLLM_PID              child process id
 
 : "${MODEL_NAME:?MODEL_NAME must be set}"
@@ -28,26 +28,31 @@
 # per-job node-local dir instead. The calling sbatch scripts / dist_node.sh
 # export the same default in their own scope (this file may be sourced in a
 # subshell), so the trainer gets it too; an existing value is kept.
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${JOB_ID:-${SLURM_JOB_ID:-local}}}"
 mkdir -p "$TRITON_CACHE_DIR"
 # openai_harmony (gpt-oss tokenizer in vLLM) caches vocab files in /tmp/tiktoken-rs-cache by
 # default; on shared nodes another user may own it (Permission denied -> vLLM dies at startup).
 # Persistent per-user dir (a per-job $TMPDIR would re-download the vocab every job).
-export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-/data/hf_cache/${USER}/tiktoken-rs}"
+export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-${CLLM_USER_CACHE:-/data/hf_cache/${USER}}/tiktoken-rs}"
 mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 : "${VLLM_EXTRA_ARGS:=}"
 
 if [[ -z "${VLLM_PORT}" ]]; then
-    # Derive a deterministic port from SLURM_JOB_ID so concurrent jobs on the
-    # same node never collide. Fall back to a random port outside any job.
-    if [[ -n "${SLURM_JOB_ID}" ]]; then
-        VLLM_PORT=$(( 20000 + (SLURM_JOB_ID % 9000) ))
+    # Derive a deterministic port from the job id (JOB_NUM, slurm/platform.sh) so concurrent
+    # jobs on the same node never collide. Fall back to a random port outside any job.
+    : "${JOB_NUM:=${SLURM_JOB_ID:-}}"
+    if [[ -n "${JOB_NUM}" ]]; then
+        VLLM_PORT=$(( 20000 + (JOB_NUM % 9000) ))
     else
         VLLM_PORT=$(shuf -i 20000-28999 -n 1)
     fi
 fi
 export VLLM_PORT
-export VLLM_URL="http://$(hostname -f):${VLLM_PORT}"
+if typeset -f cllm_self_host > /dev/null; then
+    export VLLM_URL="http://$(cllm_url_host "$(cllm_self_host)"):${VLLM_PORT}"
+else
+    export VLLM_URL="http://$(hostname -f):${VLLM_PORT}"
+fi
 
 mkdir -p "$LOG_DIR"
 

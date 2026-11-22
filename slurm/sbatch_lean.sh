@@ -59,7 +59,13 @@
 # before they could save (job 11200771). The batch shell on TERM waits <= 100 s for the ranks,
 # then stops vLLM and exits with the worst rank rc. Multi-node runs still need srun, so a
 # preempted multi-node job loses the steps since its last periodic checkpoint (SAVE_EVERY).
-# A requeued job (same SLURM_JOB_ID) reuses LOG_DIR and resumes.
+# A requeued job (same job id) reuses LOG_DIR and resumes.
+#
+# Modal (modal_jobs/app.py; CLLM_PLATFORM=modal, see slurm/platform.sh): every node is one container
+# that runs this script with CLLM_NODE_RANK; node 0 also runs vLLM, and every node starts its own
+# ranks as local children (no srun), so multi-node ranks also save on preemption there. Modal's
+# notice is an interrupt with 30 s to the kill (PREEMPT_WAIT_S=25); Modal reruns the call and the
+# stable JOB_ID resumes from LOG_DIR.
 #
 # DRY_RUN=1 prints the hostfile, per-rank RANK/LOCAL_RANK/GPU mapping and commands; launches nothing.
 
@@ -67,6 +73,7 @@ set -e
 
 REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
 cd "$REPO_DIR"
+source "$REPO_DIR/slurm/platform.sh"   # Babel vs Modal paths, envs, hosts, signals
 
 : "${MODEL_NAME:=Qwen/Qwen3-8B}"
 : "${LORA_RANK:=32}"
@@ -77,29 +84,31 @@ cd "$REPO_DIR"
 : "${LOSS_FN:=ppo}"
 : "${VLLM_GPU_MEM_FRAC:=0.85}"  # vLLM has its own GPU(s)
 : "${VLLM_TP_SIZE:=1}"
-: "${GPUS_PER_NODE:=${SLURM_GPUS_ON_NODE:-8}}"
+: "${GPUS_PER_NODE:=$(cllm_gpus_on_node)}"
+: "${GPUS_PER_NODE:=8}"
 : "${FSDP:=0}"
 : "${GPT_OSS_LM_HEAD:=1}"  # Tinker parity (lm_head LoRA); needs lean_rl/vllm_plugin installed
 : "${MAX_TOKENS:=2048}"
 : "${VLLM_STARTUP_TIMEOUT_S:=7200}"  # cold imports + /data weight reads on Babel have taken >40 min
-: "${VLLM_ENV:=clm-vllm}"  # micromamba env for the vLLM server only (vLLM 0.33; the trainer always uses clm)
+: "${VLLM_ENV:=clm-vllm}"  # Python env for the vLLM server only (vLLM 0.33; the trainer always uses clm)
 : "${EXTRA_ARGS:=}"
 : "${DRY_RUN:=0}"
 
-: "${SLURM_JOB_ID:?SLURM_JOB_ID must be set (run under sbatch)}"
-: "${SLURM_JOB_NODELIST:?SLURM_JOB_NODELIST must be set (run under sbatch)}"
+: "${JOB_NUM:?no job id: run under sbatch (SLURM_JOB_ID) or via modal_jobs/app.py (JOB_ID)}"
 
-# Short hostnames resolve inside Babel; the same names serve MASTER_ADDR and vllm_urls.
-HOSTS=(${(f)"$(scontrol show hostnames "$SLURM_JOB_NODELIST")"})
+# Babel: short hostnames (they resolve inside Babel); Modal: container IPs. The same names serve
+# MASTER_ADDR and vllm_urls.
+HOSTS=(${(f)"$(cllm_hosts)"})
 NNODES=${#HOSTS[@]}
+THIS_NODE=${CLLM_NODE_RANK:-0}   # Babel: the batch script runs on node 0; Modal: one container per node
 MASTER_ADDR=${HOSTS[1]}
-MASTER_PORT=$(( 29500 + SLURM_JOB_ID % 1000 ))
-VLLM_PORT=$(( 20000 + SLURM_JOB_ID % 9000 ))
-VLLM_URLS="http://${HOSTS[1]}:${VLLM_PORT}"   # only node 0 runs vLLM
+MASTER_PORT=$(( 29500 + JOB_NUM % 1000 ))
+VLLM_PORT=$(( 20000 + JOB_NUM % 9000 ))
+VLLM_URLS="http://$(cllm_url_host "${HOSTS[1]}"):${VLLM_PORT}"   # only node 0 runs vLLM
 
 if [[ -z "${LOG_DIR}" ]]; then
     # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
-    LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    LOG_DIR=${LOGS_ROOT}/${JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
 fi
 
 TRAINER_GPUS_NODE0=$(( GPUS_PER_NODE - VLLM_TP_SIZE ))
@@ -148,7 +157,7 @@ for (( n = 0; n < NNODES; n++ )); do
     done
 done
 WORLD=${#RANK_HOST[@]}
-HOSTFILE="${TMPDIR:-/tmp}/lean-hostfile-${SLURM_JOB_ID}"
+HOSTFILE="${TMPDIR:-/tmp}/lean-hostfile-${JOB_ID}"
 CPUS_PER_RANK=${CPUS_PER_RANK:-2}   # 8 ranks x 2 = the 16 CPUs the header requests per node
 
 if [[ "$1" != "--rank" ]]; then
@@ -169,8 +178,9 @@ if [[ "$1" != "--rank" ]]; then
         --gres=gpu:"$GPUS_PER_NODE" --gpu-bind=none --cpus-per-task="$CPUS_PER_RANK"
         zsh "$REPO_DIR/slurm/sbatch_lean.sh" --rank)
     if [[ "$DRY_RUN" == "1" ]]; then
-        if (( NNODES == 1 )); then
-            echo "[lean] DRY_RUN single node: $WORLD local rank processes: zsh $REPO_DIR/slurm/sbatch_lean.sh --rank"
+        if (( NNODES == 1 )) || [[ "$CLLM_PLATFORM" == modal ]]; then
+            n_local=${#${(M)RANK_NODE:#$THIS_NODE}}
+            echo "[lean] DRY_RUN node $THIS_NODE/$NNODES ($CLLM_PLATFORM): $n_local local rank processes: zsh $REPO_DIR/slurm/sbatch_lean.sh --rank"
         else
             echo "[lean] DRY_RUN SLURM_HOSTFILE=$HOSTFILE srun: ${SRUN_CMD[*]}"
         fi
@@ -179,31 +189,26 @@ if [[ "$1" != "--rank" ]]; then
 fi
 
 # ---- environment (parent and workers) --------------------------------------
-export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
-export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
-eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate clm
-
-export HF_HUB_CACHE=/data/hf_cache/hub
-export HF_DATASETS_CACHE=/data/hf_cache/datasets
-unset HF_HOME
+cllm_activate clm
+cllm_hf_cache shared
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 # Node-local Triton cache for vLLM AND the trainer (~/.triton may point at a /scratch
 # dir missing on this node). Exported in the parent scope because launch_vllm.sh runs
 # in a subshell whose exports are lost.
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${SLURM_JOB_ID:-local}}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR:-/tmp}/triton-${USER}-${JOB_ID:-local}}"
 mkdir -p "$TRITON_CACHE_DIR"
 # openai_harmony (gpt-oss tokenizer in vLLM) caches vocab files in /tmp/tiktoken-rs-cache by
 # default; on shared nodes another user may own it (Permission denied -> vLLM dies at startup).
 # Persistent per-user dir (a per-job $TMPDIR would re-download the vocab every job).
-export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-/data/hf_cache/${USER}/tiktoken-rs}"
+export TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-${CLLM_USER_CACHE}/tiktoken-rs}"
 mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
 
 # ---- rank: one process per trainer rank (local child on 1 node, srun task otherwise) ----
 if [[ "$1" == "--rank" ]]; then
-    if [[ "$(hostname -s)" == "${HOSTS[1]}" ]]; then
+    # LEAN_NODE: set for local children (single node, Modal); srun tasks find node 0 by hostname.
+    if [[ "${LEAN_NODE:-}" == 0 ]] || [[ -z "${LEAN_NODE:-}" && "$(hostname -s)" == "${HOSTS[1]}" ]]; then
         first=$VLLM_TP_SIZE; LOCAL_WORLD_SIZE=$TRAINER_GPUS_NODE0
     else
         first=0; LOCAL_WORLD_SIZE=$GPUS_PER_NODE
@@ -218,10 +223,10 @@ if [[ "$1" == "--rank" ]]; then
     exec python -m lean_rl.train "${TRAINER_ARGS[@]}"
 fi
 
-# ---- parent (node 0): vLLM, then srun the ranks ---------------------------
+# ---- parent (node 0: vLLM, then the ranks; Modal nodes > 0: their ranks only) ----
 # Checks the vllm.general_plugins entry point is registered (and importable); stderr kept so a
 # broken install is not misreported as missing. Not run under DRY_RUN.
-if [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! "$MAMBA_ROOT_PREFIX/envs/$VLLM_ENV/bin/python" -c "
+if (( THIS_NODE == 0 )) && [[ "$USE_LM_HEAD_PLUGIN" == "1" ]] && ! "$(cllm_env_python "$VLLM_ENV")" -c "
 import importlib.metadata as md, sys
 eps = [e for e in md.entry_points(group='vllm.general_plugins') if e.name == 'lean_rl_gpt_oss_lm_head']
 sys.exit(0 if eps and eps[0].load() else 1)"; then
@@ -233,11 +238,13 @@ fi
 mkdir -p "$LOG_DIR"
 echo "[lean] LOG_DIR=$LOG_DIR"
 
+VLLM_BG_PID=
+if (( THIS_NODE == 0 )); then
 (
-    [[ "$VLLM_ENV" != clm ]] && micromamba activate "$VLLM_ENV"
+    [[ "$VLLM_ENV" != clm ]] && cllm_activate "$VLLM_ENV"
     # FlashInfer JIT-compiles kernels (sampling, gpt-oss attention) and many Babel nodes have
     # no /usr/local/cuda/bin/nvcc: use the env's pip CUDA toolkit (see slurm/README.md).
-    for d in "$CONDA_PREFIX"/lib/python3.*/site-packages/nvidia/cu13; do
+    for d in "$CLLM_ENV_PREFIX"/lib/python3.*/site-packages/nvidia/cu13(N); do
         [[ -x "$d/bin/nvcc" ]] && export CUDA_HOME="$d"
     done
     export CUDA_VISIBLE_DEVICES="$VLLM_VISIBLE"
@@ -247,15 +254,17 @@ echo "[lean] LOG_DIR=$LOG_DIR"
     wait $VLLM_PID
 ) &
 VLLM_BG_PID=$!
+fi
 stop_vllm() {
-    kill "$VLLM_BG_PID" 2>/dev/null
-    pkill -P "$VLLM_BG_PID" 2>/dev/null
+    [[ -n "$VLLM_BG_PID" ]] || return 0
+    kill "$VLLM_BG_PID" 2>/dev/null || true
+    pkill -P "$VLLM_BG_PID" 2>/dev/null || true
 }
 trap stop_vllm EXIT INT
 
-# Preemption: ranks get Slurm's SIGTERM themselves (save + exit 0). Single node: TERM them again
-# (harmless; covers a TERM sent to this shell alone), wait <= 100 s, then stop vLLM. Multi-node:
-# forward TERM to srun (which SIGKILLs its tasks; see "Preemption" above).
+# Preemption: ranks get Slurm's SIGTERM themselves (save + exit 0). Local ranks: TERM them again
+# (harmless; covers a TERM sent to this shell alone), wait <= PREEMPT_WAIT_S, then stop vLLM.
+# Babel multi-node: forward TERM to srun (which SIGKILLs its tasks; see "Preemption" above).
 RANK_PIDS=()
 any_rank_alive() {
     local p
@@ -268,7 +277,7 @@ on_term() {
     if (( ${#RANK_PIDS} )); then
         kill -TERM "${RANK_PIDS[@]}" 2>/dev/null
         local i p s
-        for (( i = 0; i < 100; i++ )); do   # KillWait is 120 s; leave room to stop vLLM
+        for (( i = 0; i < PREEMPT_WAIT_S; i++ )); do   # Babel KillWait 120 s, Modal 30 s
             any_rank_alive || break
             sleep 1
         done
@@ -281,7 +290,7 @@ on_term() {
     elif [[ -n "$SRUN_PID" ]]; then
         kill -TERM "$SRUN_PID" 2>/dev/null
         local i
-        for (( i = 0; i < 100; i++ )); do   # KillWait is 120 s; leave room to stop vLLM
+        for (( i = 0; i < PREEMPT_WAIT_S; i++ )); do   # Babel KillWait 120 s, Modal 30 s
             kill -0 "$SRUN_PID" 2>/dev/null || break
             sleep 1
         done
@@ -294,8 +303,9 @@ on_term() {
     stop_vllm
     exit $rc
 }
-trap on_term TERM
+cllm_trap_preempt on_term
 
+if (( THIS_NODE == 0 )); then
 echo "[lean] waiting on http://127.0.0.1:${VLLM_PORT}/health ..."
 attempts=0
 until curl -sf "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null; do
@@ -313,16 +323,22 @@ until curl -sf "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null; do
     fi
 done
 echo "[lean] vLLM ready"
+fi
 
 export MODEL_NAME LORA_RANK GROUP_SIZE GROUPS_PER_BATCH LEARNING_RATE ENV LOSS_FN VLLM_TP_SIZE
 export MAX_TOKENS GPUS_PER_NODE FSDP GPT_OSS_LM_HEAD EXTRA_ARGS USE_LM_HEAD_PLUGIN TRAINER_GPUS_NODE0
 export MASTER_ADDR MASTER_PORT VLLM_PORT VLLM_URLS LOG_DIR REPO_DIR
-if (( NNODES == 1 )); then
-    # Local children (see "Preemption" above). Each rank's PID is python's (the --rank branch
-    # execs it). Like srun --kill-on-bad-exit: once a rank fails, TERM the rest, KILL after 60 s.
+if (( NNODES == 1 )) || [[ "$CLLM_PLATFORM" == modal ]]; then
+    # Local children: this node's ranks (see "Preemption" above). Each rank's PID is python's (the
+    # --rank branch execs it). Like srun --kill-on-bad-exit: once a rank fails, TERM the rest, KILL
+    # after 60 s. (Modal multi-node: a failed container takes the whole cluster down.)
+    local_id=0
     for (( r = 0; r < WORLD; r++ )); do
-        LEAN_RANK=$r LEAN_WORLD=$WORLD LEAN_LOCALID=$r zsh "$REPO_DIR/slurm/sbatch_lean.sh" --rank &
+        (( RANK_NODE[r+1] == THIS_NODE )) || continue
+        LEAN_RANK=$r LEAN_WORLD=$WORLD LEAN_LOCALID=$local_id LEAN_NODE=$THIS_NODE \
+            zsh "$REPO_DIR/slurm/sbatch_lean.sh" --rank &
         RANK_PIDS+=($!)
+        local_id=$(( local_id + 1 ))
     done
     rc=0
     pending=("${RANK_PIDS[@]}")

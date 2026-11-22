@@ -16,14 +16,11 @@
 
 set -e
 
-export MAMBA_EXE='/home/ksnair/.local/bin/micromamba'
-export MAMBA_ROOT_PREFIX='/home/ksnair/micromamba'
-eval "$("$MAMBA_EXE" shell hook --shell zsh --root-prefix "$MAMBA_ROOT_PREFIX")"
-micromamba activate clm
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
+source "$REPO_DIR/slurm/platform.sh"   # Babel vs Modal paths, envs, signals
+cllm_activate clm
 
-export HF_HUB_CACHE=/data/hf_cache/hub
-export HF_DATASETS_CACHE=/data/hf_cache/datasets
-unset HF_HOME
+cllm_hf_cache shared
 export TOKENIZERS_PARALLELISM=true
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
@@ -34,19 +31,18 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 : "${EXTRA_ARGS:=}"
 
 if [[ -z "${LOG_DIR}" ]]; then
-    if [[ -n "${SLURM_JOB_ID}" ]]; then
-        # No timestamp: a requeued job (same SLURM_JOB_ID) resumes into the same LOG_DIR.
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/eval-${SLURM_JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
+    if [[ -n "${JOB_ID}" ]]; then
+        # No timestamp: a requeued job (same job id) resumes into the same LOG_DIR.
+        LOG_DIR=${LOGS_ROOT}/eval-${JOB_ID}-$(echo "$MODEL_NAME" | tr '/' '-')
     else
         STAMP=$(date +%Y%m%d-%H%M%S)
-        LOG_DIR=/data/hf_cache/ksnair/CuriousLLMs_logs/eval-${STAMP}-${SLURM_JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
+        LOG_DIR=${LOGS_ROOT}/eval-${STAMP}-${JOB_ID:-local}-$(echo "$MODEL_NAME" | tr '/' '-')
     fi
 fi
 export LOG_DIR
 mkdir -p "$LOG_DIR"
 echo "[eval] LOG_DIR=$LOG_DIR"
 
-REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-/home/ksnair/worktrees/slurm}}"
 cd "$REPO_DIR"
 export PYTHONPATH="./tinker-cookbook:${PYTHONPATH:-}"
 source slurm/launch_vllm.sh

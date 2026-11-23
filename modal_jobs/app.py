@@ -103,7 +103,7 @@ image = (
         REMOTE_REPO,
         ignore=[
             ".git", ".env", ".claude", ".claude-flow", ".swarm", ".superpowers", ".pytest_cache",
-            "logs", "notebooks", "papers", "batch_data", "RND_experimentation", "modal_tests",
+            "logs", "notebooks", "papers", "batch_data", "RND_experimentation",
             "embeddings", "**/__pycache__", "**/*.ipynb",
         ],
     )
